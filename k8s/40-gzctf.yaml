@@ -1,4 +1,4 @@
-# gzctf platform — pulls image dimasmaualana/gzctf:develop.
+# gzctf platform — pulls the custom image published by this project.
 # Uses an init container to substitute the postgres password into
 # appsettings.json (mounted from the ConfigMap, can't templatize at
 # rest without a third-party tool). The result lands on an emptyDir
@@ -14,6 +14,17 @@ spec:
     requests:
       storage: 20Gi
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wg-config
+  namespace: gzctf
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,6 +39,13 @@ spec:
     metadata: { labels: { app: gzctf } }
     spec:
       serviceAccountName: gzctf
+      nodeSelector:
+        kubernetes.io/hostname: gzctf-control
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Equal
+          value: "true"
+          effect: NoExecute
       initContainers:
         # Inline secrets (postgres-password, xor-key) into the
         # appsettings.json placeholders. The gzctf container would
@@ -42,6 +60,7 @@ spec:
               sed \
                 -e "s|__POSTGRES_PASSWORD__|$POSTGRES_PASSWORD|g" \
                 -e "s|__XOR_KEY__|$XOR_KEY|g" \
+                -e "s|__AD_SSH_INTERNAL_SECRET__|$AD_SSH_INTERNAL_SECRET|g" \
                 /tmpl/appsettings.json > /rendered/appsettings.json
               chmod 600 /rendered/appsettings.json
           env:
@@ -55,19 +74,40 @@ spec:
                 secretKeyRef:
                   name: gzctf-secrets
                   key: xor-key
+            - name: AD_SSH_INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gzctf-secrets
+                  key: ad-ssh-internal-secret
           volumeMounts:
             - { name: appsettings-tmpl, mountPath: /tmpl }
             - { name: appsettings-rendered, mountPath: /rendered }
       containers:
         - name: gzctf
-          image: dimasmaualana/gzctf:develop
+          image: ghcr.io/endraanugrah12/gzctf:evidence-routes
+          imagePullPolicy: Always
           ports:
-            - containerPort: 8080
+            # Port 8080 is reachable only through the private VPC firewall and
+            # is used by A&D flag-writer sidecars on the worker node.
+            - { name: http, containerPort: 8080, hostPort: 8080 }
+            - { name: honeypot-ssh, containerPort: 2222, hostPort: 2222 }
+            - { name: honeypot-mysql, containerPort: 3306, hostPort: 3306 }
+            - { name: honeypot-pg, containerPort: 5432, hostPort: 5432 }
+            - { name: honeypot-redis, containerPort: 6379, hostPort: 6379 }
+            - { name: honeypot-mem, containerPort: 11211, hostPort: 11211 }
+            - { name: honeypot-mongo, containerPort: 27017, hostPort: 27017 }
+            - { name: honeypot-es, containerPort: 9200, hostPort: 9200 }
           env:
             - name: LC_ALL
               value: en_US.UTF-8
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gzctf-secrets
+                  key: admin-password
           volumeMounts:
             - { name: gzctf-files, mountPath: /app/files }
+            - { name: wg-config, mountPath: /wg-config }
             - { name: appsettings-rendered, mountPath: /app/appsettings.json, subPath: appsettings.json, readOnly: true }
           readinessProbe:
             httpGet: { path: /, port: 8080 }
@@ -89,6 +129,9 @@ spec:
             name: gzctf-appsettings
         - name: appsettings-rendered
           emptyDir: {}
+        - name: wg-config
+          persistentVolumeClaim:
+            claimName: wg-config
 ---
 apiVersion: v1
 kind: Service

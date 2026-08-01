@@ -1,0 +1,123 @@
+# Optional A&D access services. These use helper images published by the
+# repository's publish-helper-images workflow.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gzctf-wireguard
+  namespace: gzctf
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gzctf-wireguard-service-reader
+  namespace: gzctf-challenges
+rules:
+  - apiGroups: [""]
+    resources: [pods, services]
+    verbs: [get, list, watch]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gzctf-wireguard-service-reader
+  namespace: gzctf-challenges
+subjects:
+  - kind: ServiceAccount
+    name: gzctf-wireguard
+    namespace: gzctf
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gzctf-wireguard-service-reader
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wireguard
+  namespace: gzctf
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: wireguard } }
+  template:
+    metadata: { labels: { app: wireguard } }
+    spec:
+      serviceAccountName: gzctf-wireguard
+      nodeSelector:
+        kubernetes.io/hostname: gzctf-control
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Equal
+          value: "true"
+          effect: NoExecute
+      containers:
+        - name: wireguard
+          image: ghcr.io/endraanugrah12/gzctf-wireguard:main
+          imagePullPolicy: Always
+          env:
+            - { name: CONFIG_DIR, value: /config }
+            - { name: CHALLENGE_NAMESPACE, value: gzctf-challenges }
+          ports:
+            - { name: wireguard, containerPort: 51820, hostPort: 51820, protocol: UDP }
+          securityContext:
+            privileged: true
+            capabilities:
+              add: [NET_ADMIN, SYS_MODULE]
+          volumeMounts:
+            - { name: wg-config, mountPath: /config }
+            - { name: tun, mountPath: /dev/net/tun }
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+      volumes:
+        - name: wg-config
+          persistentVolumeClaim:
+            claimName: wg-config
+        - name: tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ssh-jump
+  namespace: gzctf
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: ssh-jump } }
+  template:
+    metadata: { labels: { app: ssh-jump } }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: gzctf-control
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Equal
+          value: "true"
+          effect: NoExecute
+      containers:
+        - name: ssh-jump
+          image: ghcr.io/endraanugrah12/gzctf-ssh-jump:main
+          imagePullPolicy: Always
+          env:
+            - { name: GZCTF_URL, value: "http://gzctf.gzctf.svc.cluster.local" }
+            - name: INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gzctf-secrets
+                  key: ad-ssh-internal-secret
+          ports:
+            - { name: ssh, containerPort: 22, hostPort: 22022 }
+          readinessProbe:
+            tcpSocket: { port: 22 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 256Mi }

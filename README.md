@@ -65,12 +65,17 @@ can grab a plain compose instead via the panel's "bring your own service" link.
 ## Kubernetes / k3s
 
 ```sh
-cd k8s/
-$EDITOR 30-gzctf-config.yaml   # set passwords + PublicEntry
-$EDITOR 50-ingress.yaml        # set hostname
+$EDITOR k8s/05-traefik-config.yaml  # set ACME email
+$EDITOR k8s/30-gzctf-config.yaml    # set secrets, hostname, control private IP
+$EDITOR k8s/50-ingress.yaml         # set hostname
 
-kubectl apply -f .
-kubectl -n gzctf rollout status deploy/gzctf
+make KUBECTL='sudo k3s kubectl' k8s-apply
+sudo k3s kubectl -n gzctf rollout status deploy/gzctf
 ```
 
-See [`k8s/README.md`](k8s/README.md) for details (storage classes, RBAC, cert-manager swap).
+The Kubernetes path uses the custom GZCTF image and carries over the A&D SSH
+jump, restricted WireGuard gateway, honeypot listeners, first-boot admin seed,
+submission-evidence policy, and PlatformProxy routing. See
+[`k8s/README.md`](k8s/README.md) for
+node placement, firewall ports, storage, RBAC, and the remaining provider
+limitations.

@@ -7,7 +7,10 @@ COMPOSE_BARE = ${SUDO} docker compose -f compose.yml -f compose.standalone.yml
 
 .PHONY: help wizard setup init-config platform-build platform-up platform-up-no-traefik platform-down platform-restart platform-clean \
         platform-logs gzctf-logs db-logs cache-logs traefik-logs traefik-restart \
-        flush-cache pull pull-no-traefik pull-gzctf update update-no-traefik update-gzctf
+        flush-cache pull pull-no-traefik pull-gzctf update update-no-traefik update-gzctf \
+        k8s-check k8s-apply k8s-status k8s-logs
+
+KUBECTL ?= kubectl
 
 help:
 	@echo "GZCTF platform make targets:"
@@ -39,6 +42,12 @@ help:
 	@echo "  update-gzctf     Build gzctf + recreate just the gzctf container"
 	@echo "  update           Pull all + recreate any container with a changed image (traefik mode)"
 	@echo "  update-no-traefik  Same as 'update' but for the standalone (no-traefik) mode"
+	@echo ""
+	@echo "Kubernetes / k3s:"
+	@echo "  k8s-check        Refuse deployment while CHANGE_ME placeholders remain"
+	@echo "  k8s-apply        Validate and apply all manifests in dependency order"
+	@echo "  k8s-status       Show platform and challenge pods with node placement"
+	@echo "  k8s-logs         Tail the GZCTF pod"
 	@echo ""
 	@echo "First-time setup:"
 	@echo "  make wizard && make setup && make platform-up"
@@ -123,3 +132,30 @@ traefik-restart:
 
 flush-cache:
 	(cd compose && ${COMPOSE} exec cache redis-cli FLUSHALL)
+
+k8s-check:
+	@if grep -nE 'CHANGE_ME|ctf\.example\.com' k8s/*.yaml; then \
+		echo "Replace every deployment placeholder before deploying." >&2; \
+		exit 1; \
+	fi
+	@${KUBECTL} apply --dry-run=client -f k8s/00-namespace.yaml \
+		-f k8s/05-traefik-config.yaml -f k8s/10-postgres.yaml -f k8s/20-redis.yaml \
+		-f k8s/30-gzctf-config.yaml -f k8s/35-ad-network-policy.yaml \
+		-f k8s/40-gzctf.yaml -f k8s/50-ingress.yaml \
+		-f k8s/60-ad-access.yaml >/dev/null
+
+k8s-apply: k8s-check
+	@${KUBECTL} apply -f k8s/00-namespace.yaml
+	@${KUBECTL} apply -f k8s/05-traefik-config.yaml
+	@${KUBECTL} apply -f k8s/30-gzctf-config.yaml
+	@${KUBECTL} apply -f k8s/10-postgres.yaml -f k8s/20-redis.yaml
+	@${KUBECTL} apply -f k8s/35-ad-network-policy.yaml
+	@${KUBECTL} apply -f k8s/40-gzctf.yaml -f k8s/50-ingress.yaml
+	@${KUBECTL} apply -f k8s/60-ad-access.yaml
+
+k8s-status:
+	@${KUBECTL} -n gzctf get pods -o wide
+	@${KUBECTL} -n gzctf-challenges get pods -o wide
+
+k8s-logs:
+	@${KUBECTL} -n gzctf logs -f deployment/gzctf

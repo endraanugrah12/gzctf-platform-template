@@ -21,6 +21,10 @@ WG_CONF="${CONFIG_DIR}/wg0.conf"
 SERVER_PRIV="${CONFIG_DIR}/server.key"
 SERVER_PUB="${CONFIG_DIR}/server.pub"
 INTERFACE="${WG_INTERFACE:-wg0}"
+CHALLENGE_NAMESPACE="${CHALLENGE_NAMESPACE:-gzctf-challenges}"
+WG_FORWARD_CHAIN="GZCTF_WG_DEST"
+K8S_TOKEN_FILE="/var/run/secrets/kubernetes.io/serviceaccount/token"
+K8S_CA_FILE="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 
 mkdir -p "$CONFIG_DIR"
 
@@ -77,9 +81,89 @@ wg-quick up "$WG_CONF" || {
   exit 1
 }
 
+# In Kubernetes the client config routes the Service CIDR through this pod.
+# Restrict forwarding to Services created by GZCTF in the challenge namespace;
+# otherwise the same route would also expose postgres, redis, and kube-system.
+refresh_k8s_destinations() {
+  local api token selector services pods service_rules pod_rules rules
+  api="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS:-443}"
+  token="$(cat "$K8S_TOKEN_FILE")"
+  selector="labelSelector=gzctf.gzti.me%2FResourceId"
+
+  if ! services="$(curl -fsS --max-time 5 --cacert "$K8S_CA_FILE" \
+      -H "Authorization: Bearer ${token}" \
+      "${api}/api/v1/namespaces/${CHALLENGE_NAMESPACE}/services?${selector}")" || \
+     ! pods="$(curl -fsS --max-time 5 --cacert "$K8S_CA_FILE" \
+      -H "Authorization: Bearer ${token}" \
+      "${api}/api/v1/namespaces/${CHALLENGE_NAMESPACE}/pods?${selector}")"; then
+    echo "[wg-sidecar] service discovery failed; keeping the existing forwarding rules" >&2
+    return 1
+  fi
+
+  service_rules="$(printf '%s' "$services" | jq -r '
+    .items[]
+    | select(.spec.clusterIP != null and .spec.clusterIP != "None")
+    | .spec.clusterIP as $ip
+    | .spec.ports[]
+    | select((.protocol // "TCP") == "TCP")
+    | [$ip, (.port | tostring)] | @tsv')"
+  # kube-proxy normally DNATs a ClusterIP before the filter/FORWARD hook, so
+  # allow the backing pod IP as well as the Service IP.
+  pod_rules="$(printf '%s' "$pods" | jq -r '
+    .items[]
+    | select(.status.podIP != null)
+    | .status.podIP as $ip
+    | .spec.containers[0].ports[]?
+    | select((.protocol // "TCP") == "TCP")
+    | [$ip, (.containerPort | tostring)] | @tsv')"
+  rules="${service_rules}"$'\n'"${pod_rules}"
+
+  # Rebuild fail-closed. A transient API failure above leaves the previous
+  # known-good rules in place; an empty successful result permits nothing.
+  iptables -F "$WG_FORWARD_CHAIN"
+  iptables -A "$WG_FORWARD_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  while IFS=$'\t' read -r ip port; do
+    [[ -z "$ip" || -z "$port" ]] && continue
+    iptables -A "$WG_FORWARD_CHAIN" -d "${ip}/32" -p tcp --dport "$port" -j ACCEPT
+  done <<< "$rules"
+  iptables -A "$WG_FORWARD_CHAIN" -j DROP
+}
+
+start_k8s_forward_filter() {
+  [[ -n "${KUBERNETES_SERVICE_HOST:-}" ]] || return 0
+  [[ -r "$K8S_TOKEN_FILE" && -r "$K8S_CA_FILE" ]] || {
+    echo "[wg-sidecar] Kubernetes credentials missing; refusing VPN forwarding" >&2
+    return 1
+  }
+
+  iptables -N "$WG_FORWARD_CHAIN" 2>/dev/null || true
+  iptables -F "$WG_FORWARD_CHAIN"
+  iptables -A "$WG_FORWARD_CHAIN" -j DROP
+  iptables -C FORWARD -i "$INTERFACE" -j "$WG_FORWARD_CHAIN" 2>/dev/null || \
+    iptables -I FORWARD 1 -i "$INTERFACE" -j "$WG_FORWARD_CHAIN"
+  refresh_k8s_destinations || true
+
+  (
+    while true; do
+      sleep 10
+      refresh_k8s_destinations || true
+    done
+  ) &
+  K8S_FILTER_PID=$!
+  echo "[wg-sidecar] Kubernetes forwarding restricted to labelled challenge Services"
+}
+
+start_k8s_forward_filter
+
 # Graceful teardown on SIGTERM/SIGINT.
 cleanup() {
   echo "[wg-sidecar] received signal, bringing $INTERFACE down"
+  if [[ -n "${K8S_FILTER_PID:-}" ]]; then
+    kill "$K8S_FILTER_PID" 2>/dev/null || true
+    iptables -D FORWARD -i "$INTERFACE" -j "$WG_FORWARD_CHAIN" 2>/dev/null || true
+    iptables -F "$WG_FORWARD_CHAIN" 2>/dev/null || true
+    iptables -X "$WG_FORWARD_CHAIN" 2>/dev/null || true
+  fi
   wg-quick down "$WG_CONF" || true
   exit 0
 }

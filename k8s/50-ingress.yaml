@@ -29,4 +29,3 @@ spec:
                 port: { number: 80 }
   tls:
     - hosts: [ctf.example.com]      # ← CHANGE ME
-      secretName: gzctf-tls         # auto-populated by the chosen issuer

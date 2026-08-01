@@ -27,6 +27,13 @@ spec:
     metadata:
       labels: { app: postgres }
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: gzctf-control
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Equal
+          value: "true"
+          effect: NoExecute
       containers:
         - name: postgres
           image: postgres:17

@@ -29,6 +29,10 @@ stringData:
   # log in, change it via /admin/profile, then run `make init-admin`.
   admin-password: "CHANGE_ME_admin_password"
 
+  # Shared only by GZCTF and the SSH jump pod. Generate with:
+  #   openssl rand -hex 32
+  ad-ssh-internal-secret: "CHANGE_ME_ad_ssh_internal_secret"
+
   # Optional: SMTP relay credentials. Leave blank to skip email sending.
   smtp-username: ""
   smtp-password: ""
@@ -111,8 +115,23 @@ data:
           "DNS": [ "8.8.8.8", "1.1.1.1" ]
         }
       },
+      "PublicChallengeRouteConfig": {
+        "BaseDomain": ""
+      },
+      "SubmissionEvidencePolicy": {
+        "Enabled": true,
+        "MaxSolverFileSize": 8388608,
+        "AllowedLinkHosts": [
+          "chatgpt.com",
+          "chat.openai.com",
+          "gemini.google.com",
+          "claude.ai",
+          "perplexity.ai",
+          "copilot.microsoft.com"
+        ]
+      },
       "RequestLogging": true,
-      "DisableRateLimit": true,
+      "DisableRateLimit": false,
       "RegistryConfig": {
         "UserName": "",
         "Password": "",
@@ -127,7 +146,7 @@ data:
         "ForwardedHeaders": 5,
         "ForwardLimit": 1,
         "ForwardedForHeaderName": "X-Forwarded-For",
-        "TrustedNetworks": [ "0.0.0.0/0", "::/0" ],
+        "TrustedNetworks": [ "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16" ],
         "TrustedProxies": []
       },
       "Kestrel": {
@@ -178,6 +197,21 @@ data:
         "LogContainerAccess": true,
         "DelayedSubmissionThresholdMinutes": 60,
         "InstantSubmitThresholdSeconds": 3
+      },
+      "Ad": {
+        "FlagPullBaseUrl": "http://CHANGE_ME_CONTROL_PRIVATE_IP:8080",
+        "Vpn": {
+          "ConfigDir": "/wg-config",
+          "ClientCidr": "10.13.37.0/24",
+          "ServerEndpoint": "ctf.example.com:51820",
+          "Dns": "1.1.1.1",
+          "AllowedIps": "10.13.37.0/24, 10.43.0.0/16"
+        },
+        "Ssh": {
+          "InternalSecret": "__AD_SSH_INTERNAL_SECRET__",
+          "PublicHost": "ctf.example.com",
+          "PublicPort": 22022
+        }
       }
     }
 
@@ -199,14 +233,17 @@ metadata:
   namespace: gzctf-challenges
 rules:
   - apiGroups: [""]
-    resources: [pods, services, configmaps, secrets]
-    verbs: [get, list, watch, create, update, patch, delete]
+    resources: [pods, services, secrets]
+    verbs: [get, list, watch, create, update, delete]
   - apiGroups: [""]
     resources: [pods/log, pods/exec, pods/portforward]
     verbs: [get, list, create]
   - apiGroups: [""]
     resources: [events]
     verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, create, update]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -222,3 +259,32 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: gzctf-challenge-manager
+
+---
+# The provider lists nodes to keep challenge egress away from the control
+# plane, and lists namespaces before ensuring the challenge namespace exists.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gzctf-cluster-discovery
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, create]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gzctf-cluster-discovery
+subjects:
+  - kind: ServiceAccount
+    name: gzctf
+    namespace: gzctf
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: gzctf-cluster-discovery

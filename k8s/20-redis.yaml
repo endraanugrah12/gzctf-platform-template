@@ -12,6 +12,13 @@ spec:
   template:
     metadata: { labels: { app: redis } }
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: gzctf-control
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Equal
+          value: "true"
+          effect: NoExecute
       containers:
         - name: redis
           image: redis:alpine

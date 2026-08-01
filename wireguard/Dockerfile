@@ -11,7 +11,10 @@ RUN apk add --no-cache \
         iptables \
         ip6tables \
         inotify-tools \
-        openresolv
+        openresolv \
+        ca-certificates \
+        curl \
+        jq
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

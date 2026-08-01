@@ -1,0 +1,38 @@
+# A&D pods need to attack one another, receive checker traffic, and accept
+# connections forwarded by the WireGuard gateway. The provider's baseline
+# policies still block metadata, the control plane, and public egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gzctf-ad-gameplay
+  namespace: gzctf-challenges
+spec:
+  podSelector:
+    matchLabels:
+      gzctf.gzti.me/AdEngine: "true"
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gzctf
+          podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [gzctf, wireguard]
+  egress:
+    - to:
+        - podSelector: {}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
