@@ -2,10 +2,7 @@ name: '${WORKSPACE}'
 
 services:
   gzctf:
-    image: gzctf-local:evidence-routes
-    build:
-      context: ../gzctf
-      dockerfile: Dockerfile.local
+    image: ${GZCTF_IMAGE:-ghcr.io/endraanugrah12/gzctf:evidence-routes}
     restart: always
     environment:
       - "LC_ALL=en_US.UTF-8"

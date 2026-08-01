@@ -15,7 +15,7 @@ help:
 	@echo "  wizard           Interactive first-time setup (writes .env + appsettings.json)"
 	@echo "  setup            One-time bootstrap: create the external `traefik` + `challenges` networks"
 	@echo "  init-config      Generate compose/appsettings.json from the example + .env (auto-runs on platform-up)"
-	@echo "  platform-build   Build the pinned local GZCTF image (custom evidence + instance routes)"
+	@echo "  platform-build   Compatibility alias for pull-gzctf (GZCTF image is prebuilt)"
 	@echo "  platform-up      Start gzctf + db + cache + traefik (auto-runs init-config if config missing)"
 	@echo "  platform-up-no-traefik   Start gzctf + db + cache only, expose gzctf on host port 8080"
 	@echo "  platform-down    Stop everything (keeps volumes)"
@@ -33,7 +33,7 @@ help:
 	@echo "  flush-cache      Flush redis (rebuilds scoreboard cache on next request)"
 	@echo ""
 	@echo "Updating images:"
-	@echo "  pull-gzctf       Build the local custom GZCTF image (no restart)"
+	@echo "  pull-gzctf       Pull the configured GZCTF image (no restart)"
 	@echo "  pull             Pull latest of every image incl. traefik (no restart)"
 	@echo "  pull-no-traefik  Pull latest of gzctf + postgres + redis (no restart)"
 	@echo "  update-gzctf     Build gzctf + recreate just the gzctf container"
@@ -61,7 +61,7 @@ init-config:
 	@sh scripts/init-config.sh
 
 platform-build:
-	(cd compose && ${COMPOSE} build gzctf)
+	@$(MAKE) pull-gzctf
 
 platform-up: init-config
 	(cd compose && ${COMPOSE} up -d)
@@ -80,13 +80,13 @@ platform-clean:
 	(cd compose && ${COMPOSE} down -v)
 
 pull:
-	(cd compose && ${COMPOSE} pull --ignore-buildable)
+	(cd compose && ${COMPOSE} pull)
 
 pull-no-traefik:
 	(cd compose && ${COMPOSE_BARE} pull)
 
 pull-gzctf:
-	@$(MAKE) platform-build
+	(cd compose && ${COMPOSE} pull gzctf)
 
 # 'up -d' recreates any container whose image digest changed and
 # leaves the rest alone. Safe to run while the platform is live —
