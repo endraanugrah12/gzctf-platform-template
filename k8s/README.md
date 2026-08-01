@@ -121,10 +121,12 @@ The manifests expect the platform node name to be `gzctf-control`. They pin
 GZCTF, postgres, redis, WireGuard, and SSH there and tolerate this taint:
 
 ```sh
-kubectl taint node gzctf-control CriticalAddonsOnly=true:NoExecute
+kubectl taint node gzctf-control CriticalAddonsOnly=true:NoSchedule
 ```
 
 Challenge pods do not have that toleration, so they schedule on the worker.
+Use `NoSchedule`, not `NoExecute`: the k3s local-path provisioner creates
+short-lived helper pods directly on the selected node when preparing PVCs.
 Verify this after launching a test challenge with `make k8s-status`.
 
 `Ad.FlagPullBaseUrl` must contain the control VM's private IP, not its DNS

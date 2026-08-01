@@ -45,7 +45,7 @@ spec:
         - key: CriticalAddonsOnly
           operator: Equal
           value: "true"
-          effect: NoExecute
+          effect: NoSchedule
       initContainers:
         # Inline secrets (postgres-password, xor-key) into the
         # appsettings.json placeholders. The gzctf container would

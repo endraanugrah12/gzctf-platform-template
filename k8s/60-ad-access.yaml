@@ -52,7 +52,7 @@ spec:
         - key: CriticalAddonsOnly
           operator: Equal
           value: "true"
-          effect: NoExecute
+          effect: NoSchedule
       containers:
         - name: wireguard
           image: ghcr.io/endraanugrah12/gzctf-wireguard:main
@@ -100,7 +100,7 @@ spec:
         - key: CriticalAddonsOnly
           operator: Equal
           value: "true"
-          effect: NoExecute
+          effect: NoSchedule
       containers:
         - name: ssh-jump
           image: ghcr.io/endraanugrah12/gzctf-ssh-jump:main

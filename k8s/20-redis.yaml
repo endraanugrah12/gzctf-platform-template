@@ -18,7 +18,7 @@ spec:
         - key: CriticalAddonsOnly
           operator: Equal
           value: "true"
-          effect: NoExecute
+          effect: NoSchedule
       containers:
         - name: redis
           image: redis:alpine
