@@ -2,7 +2,10 @@ name: '${WORKSPACE}'
 
 services:
   gzctf:
-    image: dimasmaualana/gzctf:develop
+    image: gzctf-local:evidence-routes
+    build:
+      context: ../gzctf
+      dockerfile: Dockerfile.local
     restart: always
     environment:
       - "LC_ALL=en_US.UTF-8"
@@ -73,7 +76,7 @@ services:
       # HTTPS router
       - "traefik.http.routers.gzctf-${WORKSPACE}-https.rule=Host(`${PUBLIC_ENTRY}`)"
       - "traefik.http.routers.gzctf-${WORKSPACE}-https.entrypoints=websecure"
-      - "traefik.http.routers.gzctf-${WORKSPACE}-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.gzctf-${WORKSPACE}-https.tls.certresolver=cloudflare"
       - "traefik.http.routers.gzctf-${WORKSPACE}-https.service=gzctf-${WORKSPACE}-https"
 
   db:

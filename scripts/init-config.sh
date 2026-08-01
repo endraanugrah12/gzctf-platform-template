@@ -178,6 +178,8 @@ escape_sed() {
     printf '%s' "$1" | sed 's|[\\&|]|\\&|g'
 }
 PUBLIC_ENTRY_ESC=$(escape_sed "$PUBLIC_ENTRY")
+CHALLENGE_BASE_DOMAIN="${CHALLENGE_BASE_DOMAIN:-chall.$PUBLIC_ENTRY}"
+CHALLENGE_BASE_DOMAIN_ESC=$(escape_sed "$CHALLENGE_BASE_DOMAIN")
 XK_ESC=$(escape_sed "$XK")
 PG_ESC=$(escape_sed "$POSTGRES_PASSWORD")
 SSH_SECRET_ESC=$(escape_sed "$SSH_SECRET")
@@ -185,6 +187,7 @@ SSH_PORT="${AD_SSH_PUBLIC_PORT:-22022}"
 
 sed \
     -e "s|{{\\.PublicEntry}}|$PUBLIC_ENTRY_ESC|g" \
+    -e "s|{{\\.ChallengeBaseDomain}}|$CHALLENGE_BASE_DOMAIN_ESC|g" \
     -e "s|{{\\.XorKey}}|$XK_ESC|g" \
     -e "s|{{\\.PostgresPassword}}|$PG_ESC|g" \
     -e "s|{{\\.AdSshInternalSecret}}|$SSH_SECRET_ESC|g" \

@@ -1,0 +1,63 @@
+  name: ''
+
+  services:
+    traefik:
+      image: traefik:latest
+      restart: always
+      command:
+        - "--api.dashboard=true"
+        - "--providers.docker=true"
+        - "--providers.docker.exposedbydefault=false"
+        - "--providers.docker.network=traefik"
+        - "--providers.file.directory=/dynamic"
+        - "--providers.file.watch=true"
+        - "--log.level=INFO"
+        - "--entrypoints.web.address=:80"
+        - "--entrypoints.websecure.address=:443"
+        - "--certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL}"
+        - "--certificatesresolvers.cloudflare.acme.storage=/letsencrypt/acme.json"
+        - "--certificatesresolvers.cloudflare.acme.dnschallenge=true"
+        - "--certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
+        - "--certificatesresolvers.cloudflare.acme.dnschallenge.delaybeforecheck=15"
+      environment:
+        - "CF_DNS_API_TOKEN=${CLOUDFLARE_DNS_API_TOKEN}"
+      ports:
+        - "80:80"
+        - "443:443"
+      volumes:
+        - "/var/run/docker.sock:/var/run/docker.sock:ro"
+        - "./letsencrypt:/letsencrypt"
+        - "./challenge-proxy/dynamic:/dynamic"
+      networks:
+        traefik:
+          gw_priority: 100
+        challenges_open: {}
+        challenges_isolated: {}
+
+    challenge-proxy-watcher:
+      build:
+        context: ./challenge-proxy
+      restart: always
+      environment:
+        - "ROUTE_BASE_DOMAIN=${CHALLENGE_BASE_DOMAIN}"
+        - "CHALLENGE_NETWORK_PREFIX=challenges"
+        - "OUTPUT_DIR=/dynamic"
+        - "POLL_SECONDS=10"
+      volumes:
+        - "/var/run/docker.sock:/var/run/docker.sock:ro"
+        - "./challenge-proxy/dynamic:/dynamic"
+      networks:
+        traefik:
+          gw_priority: 100
+        challenges_open: {}
+        challenges_isolated: {}
+
+  networks:
+    traefik:
+      external: true
+    challenges_open:
+      name: challenges-open
+      external: true
+    challenges_isolated:
+      name: challenges-isolated
+      external: true

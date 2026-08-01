@@ -2,10 +2,10 @@
 # Pure platform ops; for challenge authoring use gzcli separately.
 
 SUDO ?=
-COMPOSE = ${SUDO} docker compose -f compose.yml -f compose.traefik.yml
+COMPOSE = ${SUDO} docker compose -f compose.yml -f compose.challenge-proxy.yml
 COMPOSE_BARE = ${SUDO} docker compose -f compose.yml -f compose.standalone.yml
 
-.PHONY: help wizard setup init-config platform-up platform-up-no-traefik platform-down platform-restart platform-clean \
+.PHONY: help wizard setup init-config platform-build platform-up platform-up-no-traefik platform-down platform-restart platform-clean \
         platform-logs gzctf-logs db-logs cache-logs traefik-logs traefik-restart \
         flush-cache pull pull-no-traefik pull-gzctf update update-no-traefik update-gzctf
 
@@ -15,6 +15,7 @@ help:
 	@echo "  wizard           Interactive first-time setup (writes .env + appsettings.json)"
 	@echo "  setup            One-time bootstrap: create the external `traefik` + `challenges` networks"
 	@echo "  init-config      Generate compose/appsettings.json from the example + .env (auto-runs on platform-up)"
+	@echo "  platform-build   Build the pinned local GZCTF image (custom evidence + instance routes)"
 	@echo "  platform-up      Start gzctf + db + cache + traefik (auto-runs init-config if config missing)"
 	@echo "  platform-up-no-traefik   Start gzctf + db + cache only, expose gzctf on host port 8080"
 	@echo "  platform-down    Stop everything (keeps volumes)"
@@ -32,10 +33,10 @@ help:
 	@echo "  flush-cache      Flush redis (rebuilds scoreboard cache on next request)"
 	@echo ""
 	@echo "Updating images:"
-	@echo "  pull-gzctf       Pull latest dimasmaualana/gzctf:develop (no restart)"
+	@echo "  pull-gzctf       Build the local custom GZCTF image (no restart)"
 	@echo "  pull             Pull latest of every image incl. traefik (no restart)"
 	@echo "  pull-no-traefik  Pull latest of gzctf + postgres + redis (no restart)"
-	@echo "  update-gzctf     Pull gzctf + recreate just the gzctf container"
+	@echo "  update-gzctf     Build gzctf + recreate just the gzctf container"
 	@echo "  update           Pull all + recreate any container with a changed image (traefik mode)"
 	@echo "  update-no-traefik  Same as 'update' but for the standalone (no-traefik) mode"
 	@echo ""
@@ -59,6 +60,9 @@ setup:
 init-config:
 	@sh scripts/init-config.sh
 
+platform-build:
+	(cd compose && ${COMPOSE} build gzctf)
+
 platform-up: init-config
 	(cd compose && ${COMPOSE} up -d)
 
@@ -76,13 +80,13 @@ platform-clean:
 	(cd compose && ${COMPOSE} down -v)
 
 pull:
-	(cd compose && ${COMPOSE} pull)
+	(cd compose && ${COMPOSE} pull --ignore-buildable)
 
 pull-no-traefik:
 	(cd compose && ${COMPOSE_BARE} pull)
 
 pull-gzctf:
-	(cd compose && ${COMPOSE} pull gzctf)
+	@$(MAKE) platform-build
 
 # 'up -d' recreates any container whose image digest changed and
 # leaves the rest alone. Safe to run while the platform is live —
