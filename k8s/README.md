@@ -1,195 +1,473 @@
-# Kubernetes / k3s deployment
+# GZCTF on Kubernetes / K3s
 
-Apply-in-order manifests for running GZCTF on k3s (or any other k8s
-distribution). Mirrors the docker-compose path under `compose/` but
-swaps the `ContainerProvider` to `Kubernetes` so challenge instances
-spawn as pods inside the `gzctf-challenges` namespace instead of via
-the host's docker socket.
+This directory deploys the customized GZCTF platform to Kubernetes. The
+recommended small-event layout is one K3s server for the platform and one K3s
+agent for challenge workloads:
 
-## Quick start
-
-```sh
-# 1. From the repository root, run the interactive setup and choose k8s.
-make wizard
-
-# 2. Validate and apply the generated manifests in dependency order.
-make KUBECTL='sudo k3s kubectl' k8s-apply
-
-# 3. Watch the gzctf pod come up
-sudo k3s kubectl -n gzctf rollout status deploy/gzctf
+```text
+Internet
+  |
+  | TCP 80/443
+  v
+gzctf-control
+  - K3s server and Traefik
+  - GZCTF, PostgreSQL, Redis
+  - persistent platform files
+  - BuildKit challenge-image builder
+  |
+  | private VPC
+  v
+gzctf-worker
+  - K3s agent
+  - player challenge pods
 ```
 
-The wizard asks for the public hostname, ACME email, control VM private IP,
-control node name, and K3s Service CIDR. It generates all secrets and renders
-the result under `k8s/generated/`. That directory is mode `0700`, its files are
-mode `0600`, and it is gitignored.
+GZCTF uses `PlatformProxy`, so players reach dynamic challenges through the
+main HTTPS hostname. Challenge pods do not need public node ports.
 
-Back up the generated directory securely after setup. In particular, losing or
-rotating the generated XOR key makes encrypted registry and repository
-credentials already stored in PostgreSQL unreadable.
+This is a two-node deployment, not a highly available deployment. Losing the
+control VM makes the platform and its local persistent volumes unavailable.
 
-### Secrets
+## Requirements
 
-The normal wizard handles secrets automatically. To manage them manually,
-remove the Secret document from your generated `30-gzctf-config.yaml` and
-create it separately:
+- Two Linux VMs in the same private network. Ubuntu 24.04 is tested.
+- A static public IPv4 address on the control VM.
+- A DNS hostname such as `ctf.example.com` pointing to that address.
+- Outbound internet access from both VMs for images and package downloads.
+- `git`, `make`, `curl`, and `openssl` on the control VM.
+- At least 4 vCPU / 8 GiB RAM on the control VM. BuildKit can use up to an
+  additional 2 vCPU / 3 GiB while building challenges.
+- Worker capacity appropriate for the event. 8 vCPU / 16 GiB RAM is a useful
+  starting point, but challenge resource limits determine the real capacity.
 
-```sh
-sudo k3s kubectl apply -f k8s/generated/00-namespace.yaml
+The control VM needs enough disk for PostgreSQL, uploaded files, K3s images,
+and the BuildKit cache. Start with at least 80 GiB; use more for large events.
 
-sudo k3s kubectl -n gzctf create secret generic gzctf-secrets \
-  --from-literal=postgres-password="$(openssl rand -hex 16)" \
-  --from-literal=xor-key="$(openssl rand -hex 32)" \
-  --from-literal=admin-password="Aa1$(openssl rand -hex 12)" \
-  --from-literal=ad-ssh-internal-secret="$(openssl rand -hex 32)" \
-  --from-literal=smtp-username="" \
-  --from-literal=smtp-password=""
+## Network rules
 
-# Do not subsequently apply the Secret document from
-# 30-gzctf-config.yaml; it would replace these separately managed values.
+For a GCP VPC, allow only the paths below. Restrict private rules to the cluster
+subnet or, preferably, the two node network tags.
+
+| Source | Target | Ports | Purpose |
+|---|---|---|---|
+| Internet | control VM | TCP 80, 443 | HTTP-01 validation and the platform |
+| Private subnet | control VM | TCP 6443 | Kubernetes API / agent join |
+| Private subnet | both nodes | TCP 10250 | Kubelet communication |
+| Private subnet | both nodes | UDP 8472 | Flannel VXLAN |
+| worker VM | control VM | TCP 8080 | A&D flag-pull endpoint |
+| IAP or trusted admin ranges | both nodes | TCP 22 | SSH administration |
+
+Optional A&D access also needs UDP 51820 and TCP 22022 from the Internet to the
+control VM. Only expose the honeypot ports listed later if the event actually
+uses them. Never expose PostgreSQL, Redis, TCP 6443, TCP 8080, TCP 10250, or UDP
+8472 publicly.
+
+## 1. Install K3s
+
+Install the K3s server on the control VM. Leave it untainted during initial K3s
+startup so the bundled Traefik installation and its local-path volume are
+created on the control node while it is the only node in the cluster. The
+control taint is added immediately before the GZCTF manifests are applied.
+
+```bash
+CONTROL_PRIVATE_IP=$(hostname -I | awk '{print $1}')
+
+curl -sfL https://get.k3s.io | sudo sh -s - server \
+  --node-name gzctf-control \
+  --node-ip "$CONTROL_PRIVATE_IP" \
+  --secrets-encryption
 ```
 
-Read the admin password back when you need to log in:
+Wait for the bundled ingress controller before joining the worker:
 
-```sh
-sudo k3s kubectl -n gzctf get secret gzctf-secrets -o jsonpath='{.data.admin-password}' | base64 -d
+```bash
+until sudo k3s kubectl -n kube-system get deployment traefik \
+  >/dev/null 2>&1; do
+  sleep 5
+done
+
+sudo k3s kubectl -n kube-system rollout status \
+  deployment/traefik --timeout=300s
 ```
 
-> **Don't rotate `xor-key` after first boot** — gzctf uses it to
-> encrypt repo-binding PATs + registry passwords at rest. Changing
-> the key after data lands breaks every encrypted value in the DB.
+Read the private IP and agent join token:
 
-GZCTF will be reachable at the hostname configured in `50-ingress.yaml`
-once Traefik's ACME resolver issues a TLS certificate. Port 80 must remain
-publicly reachable for the HTTP-01 challenge.
-
-## What's here
-
-| File | Purpose |
-|---|---|
-| `00-namespace.yaml` | Two namespaces: `gzctf` (platform) + `gzctf-challenges` (where challenge pods land) |
-| `05-traefik-config.yaml` | Persistent Let's Encrypt resolver for k3s Traefik |
-| `10-postgres.yaml` | PVC + Deployment + Service for postgres 17 |
-| `20-redis.yaml` | Deployment + Service for redis (cache) |
-| `30-gzctf-config.yaml` | ConfigMap holding `appsettings.json` (Kubernetes provider mode) + Secret for db password + ServiceAccount with RBAC for spawning challenge pods |
-| `35-ad-network-policy.yaml` | A&D pod-to-pod, checker, and restricted WireGuard ingress |
-| `40-gzctf.yaml` | PVC for `/app/files` + Deployment + Service for gzctf |
-| `45-buildkit-sidecar-patch.yaml` | Pod-local BuildKit sidecar used by repository-bound challenge builds |
-| `50-ingress.yaml` | Traefik ingress using the built-in ACME resolver |
-| `60-ad-access.yaml` | WireGuard and SSH jump access for A&D challenges |
-
-## Differences from the docker-compose path
-
-| Concern | docker-compose (`compose/`) | kubernetes (`k8s/`) |
-|---|---|---|
-| Challenge spawning | host docker socket | in-cluster ServiceAccount → spawns Pods in `gzctf-challenges` ns |
-| Public entry | Traefik container on host | Cluster Ingress |
-| Persistence | named docker volumes | PVCs |
-| `appsettings.json` | mounted file | ConfigMap |
-| Honeypot ports (5432, 6379, etc.) | published on host | host ports on `gzctf-control` |
-| `gzcli sync` watcher | `compose.gzcli.yml` overlay | not in scope; run gzcli from a workstation or a sidecar CronJob if you need it |
-
-## Sizing
-
-The Deployments ship with conservative resource requests/limits
-matching the docker-compose `deploy.resources` block. Bump
-`spec.template.spec.containers[].resources` if your CTF has > 50
-concurrent participants.
-
-Repository-bound challenge builds use a pod-local BuildKit sidecar in the GZCTF
-pod. Its cache is capped at 20 GiB of ephemeral storage and the process is capped
-at 2 CPUs / 3 GiB RAM. The daemon requires a privileged container on Ubuntu 24.04,
-so bind only administrator-controlled repositories. Its API is available only
-through a shared Unix socket, not a cluster service. Configure **Build Registry**
-in Admin Settings before building: for GHCR use `ghcr.io`, your lowercase
-account/organization as the namespace, your GitHub username, and a package-write
-token. The resulting pull secret is maintained automatically in
-`gzctf-challenges`, including across platform restarts.
-
-## Storage
-
-PVCs default to the cluster's default `StorageClass`. On k3s that's
-`local-path` (single-node, on-disk under `/var/lib/rancher/k3s/storage`).
-For multi-node clusters set `spec.storageClassName` explicitly on
-each PVC (e.g. `longhorn`, `ceph-rbd`, etc.).
-
-## RBAC notes
-
-`30-gzctf-config.yaml` grants gzctf's ServiceAccount namespaced access to
-challenge `pods`, `services`, registry `secrets`, and `networkpolicies`, plus
-read access to events. A small ClusterRole separately permits listing/creating
-the challenge namespace and listing nodes; node addresses are used to block
-challenge egress toward the control plane.
-
-The platform never touches the `gzctf` namespace's own resources at
-runtime — pod spawning is fully scoped to `gzctf-challenges`. If you
-move the challenges namespace, also update the RBAC `namespace:`
-field + the `KubernetesConfig.Namespace` setting in the ConfigMap.
-
-## Two-node k3s placement
-
-The manifests expect the platform node name to be `gzctf-control`. They pin
-Traefik, GZCTF, postgres, redis, WireGuard, and SSH there and tolerate this
-taint:
-
-```sh
-kubectl taint node gzctf-control CriticalAddonsOnly=true:NoSchedule
+```bash
+echo "$CONTROL_PRIVATE_IP"
+sudo cat /var/lib/rancher/k3s/server/node-token
 ```
 
-Challenge pods do not have that toleration, so they schedule on the worker.
-Use `NoSchedule`, not `NoExecute`: the k3s local-path provisioner creates
-short-lived helper pods directly on the selected node when preparing PVCs.
-Verify this after launching a test challenge with `make k8s-status`.
+Treat the token as a cluster administrator credential and back it up securely.
 
-`Ad.FlagPullBaseUrl` must contain the control VM's private IP, not its DNS
-name. The GZCTF pod binds host port 8080 for this worker-to-control path.
-Allow TCP 8080 only inside the GCP VPC; do not expose it publicly.
+On the worker VM, replace both placeholders and join the cluster:
 
-## A&D access
+```bash
+export CONTROL_PRIVATE_IP='10.20.0.2'
+export K3S_TOKEN='paste-the-control-node-token'
 
-Push this repository once before deployment so GitHub Actions publishes
-`gzctf-wireguard:main` and `gzctf-ssh-jump:main` to GHCR. Make both packages
-public, or configure an imagePullSecret in `60-ad-access.yaml`.
+curl -sfL https://get.k3s.io | sudo env \
+  K3S_URL="https://${CONTROL_PRIVATE_IP}:6443" \
+  K3S_TOKEN="$K3S_TOKEN" \
+  sh -s - agent \
+  --node-name gzctf-worker
+```
 
-Load WireGuard on the control VM before applying the access manifest:
+Back on the control VM, verify both nodes:
 
-```sh
+```bash
+sudo k3s kubectl get nodes -o wide
+```
+
+Both must be `Ready`. The optional label below is useful for operators, but
+placement does not depend on it; the control-node taint enforces separation.
+
+```bash
+sudo k3s kubectl label node gzctf-worker ctf-role=challenge --overwrite
+```
+
+## 2. Configure DNS
+
+Create an `A` record for the platform hostname pointing to the control VM's
+static public IPv4 address. Do not create an `AAAA` record unless the VM and
+firewall are actually configured for public IPv6.
+
+When using Cloudflare, start with the record set to **DNS only**. After Traefik
+has obtained the certificate and direct HTTPS works, the Cloudflare proxy can be
+enabled with SSL/TLS mode set to **Full (strict)**.
+
+Port 80 must remain reachable because the included Traefik configuration uses
+the Let's Encrypt HTTP-01 challenge.
+
+## 3. Generate the deployment
+
+Run this on the control VM:
+
+```bash
+sudo apt update
+sudo apt install -y git make curl openssl
+
+git clone https://github.com/endraanugrah12/gzctf-platform-template.git
+cd gzctf-platform-template
+```
+
+The deployment includes WireGuard and SSH helpers for A&D challenges. Prepare
+the host before applying the manifests:
+
+```bash
 sudo modprobe wireguard
 test -c /dev/net/tun
 ```
 
-WireGuard clients route the default k3s Service CIDR (`10.43.0.0/16`) through
-the gateway. The gateway maintains a deny-by-default iptables allowlist from
-Services carrying GZCTF's `gzctf.gzti.me/ResourceId` label; platform and
-kube-system Services are not forwarded. If your cluster uses a different
-Service CIDR, change `Ad.Vpn.AllowedIps` in `30-gzctf-config.yaml`.
+Run the interactive wizard:
 
-Open UDP 51820 and TCP 22022 publicly on the control VM. Honeypot ports are
-also bound there, but only add public GCP firewall rules for the listeners you
-actually intend to expose.
+```bash
+make wizard
+```
 
-For the two-node GCP layout, the required paths are:
+Choose `k8s` and provide:
 
-| Source | Target | Ports |
-|---|---|---|
-| Internet | control VM | TCP 80, 443, 22022; UDP 51820 |
-| worker VM/private subnet | control VM | TCP 6443, 8080, 10250; UDP 8472 |
-| control VM/private subnet | worker VM | TCP 10250; UDP 8472 |
+- the public hostname without `https://`;
+- a Let's Encrypt email address;
+- the control VM's private IPv4 address;
+- the Kubernetes control node name, normally `gzctf-control`;
+- the K3s Service CIDR, normally `10.43.0.0/16`.
 
-Add the honeypot TCP ports (`2222`, `3306`, `5432`, `6379`, `11211`,
-`27017`, `9200`) to the public control-VM rule only when you want those
-decoys reachable. Keep PostgreSQL and Redis as ClusterIP Services; do not add
-public firewall rules for their Kubernetes Service addresses.
+The wizard generates secrets and rendered manifests in `k8s/generated/`. The
+directory is mode `0700`, its files are mode `0600`, and it is gitignored. Store
+the printed administrator password immediately.
 
-## Provider limitations
+Back up `k8s/generated/` securely. In particular, do not rotate the generated
+XOR key after credentials have been saved in GZCTF. Registry passwords stored
+with the old key will become unreadable.
 
-The Docker challenge-route watcher is intentionally absent. In Kubernetes,
-`PlatformProxy` reaches each challenge ClusterIP through the main GZCTF HTTPS
-and WebSocket endpoint, so there is no Docker socket or Traefik file to watch.
-`PublicChallengeRouteConfig.BaseDomain` is therefore left empty; direct
-wildcard challenge subdomains are a Docker-provider feature.
+## 4. Deploy
 
-Kubernetes also does not provide Docker-style end-of-game image snapshots,
-L2 bridge isolation, or the KotH leader-cooldown iptables hook. GZCTF records a
-filesystem change list instead of an image snapshot. These are provider-level
-limitations, not missing manifests.
+Taint the control node now that Traefik is initialized. The `NoSchedule` taint
+keeps ordinary challenge pods on the worker, while every platform Deployment
+has the matching toleration and an explicit control-node selector:
+
+```bash
+sudo k3s kubectl taint node gzctf-control \
+  CriticalAddonsOnly=true:NoSchedule --overwrite
+
+make KUBECTL='sudo k3s kubectl' k8s-apply
+
+sudo k3s kubectl -n gzctf rollout status \
+  deployment/gzctf --timeout=600s
+```
+
+Do not use `NoExecute`. The K3s local-path provisioner creates short-lived
+helper pods on the node selected for a PVC.
+
+Check placement and storage:
+
+```bash
+sudo k3s kubectl -n gzctf get pods,pvc -o wide
+sudo k3s kubectl -n gzctf-challenges get pods -o wide
+sudo k3s kubectl get ingress -A
+```
+
+PostgreSQL, Redis, GZCTF, Traefik, WireGuard, and SSH jump should run on the
+control node. Player challenge pods should run on the worker after a challenge
+is launched.
+
+Retrieve the initial administrator password if it was not recorded:
+
+```bash
+sudo k3s kubectl -n gzctf get secret gzctf-secrets \
+  -o jsonpath='{.data.admin-password}' | base64 -d
+echo
+```
+
+Open the configured HTTPS hostname, log in as `Admin`, and change the password.
+
+### Test without public DNS
+
+Use a Kubernetes port-forward when DNS or TLS is not ready:
+
+```bash
+sudo k3s kubectl -n gzctf port-forward service/gzctf 8080:80
+```
+
+In another terminal:
+
+```bash
+curl -I http://127.0.0.1:8080
+```
+
+This tests GZCTF directly and bypasses Traefik, Let's Encrypt, Cloudflare, and
+the GCP public firewall.
+
+## 5. Configure Kubernetes challenge builds
+
+Repository-bound challenge builds run through the pod-local BuildKit sidecar
+and must push their images to a registry that the worker can pull from.
+
+Open:
+
+```text
+https://YOUR_HOST/admin/settings
+```
+
+Select **Build push**, enable **Push built images to a registry**, and use the
+following values for a personal GitHub account:
+
+```text
+Server:        ghcr.io
+Namespace:     your-lowercase-github-user-or-organization
+Username:      your-github-username
+Password/PAT:  a classic GitHub PAT with write:packages
+```
+
+Do not enter the GitHub account password. GZCTF creates and refreshes the
+matching image-pull secret in `gzctf-challenges` after a successful build and
+again when the platform starts. The separate **Registry pull** setting is only
+needed for other private challenge images not built by this pipeline.
+
+The BuildKit daemon is a privileged container because Ubuntu 24.04 blocks the
+rootless daemon's user namespace by default. Its API is exposed only through a
+shared pod-local Unix socket, but repository Dockerfiles still execute on
+cluster infrastructure. Bind only administrator-controlled repositories.
+
+Verify BuildKit:
+
+```bash
+sudo k3s kubectl -n gzctf logs deployment/gzctf \
+  -c buildkitd --tail=100
+```
+
+## 6. Configure repository binding
+
+Open:
+
+```text
+https://YOUR_HOST/admin/repo-bindings
+```
+
+For a private GitHub repository, use a fine-grained token restricted to that
+repository with read-only **Contents** permission. Enter the repository URL,
+branch (normally `main`), scan interval, and token, then run the first scan.
+
+The scanner discovers every `.gzevent` and imports challenge packages beneath
+that event. A package containing the following property is retained in Git but
+is not created or updated by repository scans:
+
+```yaml
+ignore: true
+```
+
+Important repository behavior:
+
+- A binding fetches the whole Git repository; it is not a sparse checkout.
+- Removing a challenge directory prevents future imports but does not delete
+  the existing GZCTF challenge row. Delete that row once in the admin UI.
+- `ignore: true` is useful when a template should remain in Git without being
+  synchronized.
+- Directories whose names begin with `.`, including `.example`, are ignored.
+- A forced **Scan now** reimports challenges even when the commit SHA is
+  unchanged and can enqueue fresh builds.
+
+## Routine operations
+
+### Status and logs
+
+```bash
+make KUBECTL='sudo k3s kubectl' k8s-status
+make KUBECTL='sudo k3s kubectl' k8s-logs
+
+sudo k3s kubectl -n gzctf logs deployment/gzctf -c gzctf --since=15m
+sudo k3s kubectl -n gzctf logs deployment/gzctf -c buildkitd --since=15m
+sudo k3s kubectl -n kube-system logs deployment/traefik --since=15m
+```
+
+### Deploy a newly published GZCTF image
+
+The custom image uses a moving branch tag. Pull repository changes, reapply the
+BuildKit patch, and explicitly restart the Deployment so
+`imagePullPolicy: Always` resolves the new digest:
+
+```bash
+cd ~/gzctf-platform-template
+git pull --ff-only
+
+make KUBECTL='sudo k3s kubectl' k8s-buildkit
+sudo k3s kubectl -n gzctf rollout restart deployment/gzctf
+sudo k3s kubectl -n gzctf rollout status deployment/gzctf --timeout=600s
+```
+
+`k8s/generated/` is a rendered snapshot. A later `git pull` does not merge new
+base-manifest changes into it. Review template changes before manually carrying
+them into the generated files; do not delete and regenerate that directory
+without preserving the production secrets.
+
+### Flush Redis
+
+```bash
+sudo k3s kubectl -n gzctf exec deployment/redis -- redis-cli FLUSHALL
+```
+
+Use this only when troubleshooting stale cache data. PostgreSQL remains the
+source of truth.
+
+## Storage and backups
+
+K3s includes Rancher's `local-path` provisioner. Its volumes are node-local,
+normally under `/var/lib/rancher/k3s/storage`. The manifests pin all persistent
+platform workloads to the control node so local storage is usable in a
+two-node cluster.
+
+This does not provide failover. At minimum, back up:
+
+- `k8s/generated/` and the K3s server token;
+- PostgreSQL with regular `pg_dump` jobs;
+- the `gzctf-files` and `wg-config` PVC contents;
+- the control VM with scheduled GCP disk snapshots.
+
+Example PostgreSQL dump:
+
+```bash
+sudo k3s kubectl -n gzctf exec deployment/postgres -- \
+  pg_dump -U postgres -d gzctf -Fc > gzctf-$(date +%F).dump
+```
+
+For real node-level availability, replace `local-path` with a storage system
+designed for multi-node use, such as Longhorn or a managed CSI driver, before
+creating the PVCs.
+
+### Check PVC node affinity
+
+If a platform pod remains `Pending`, confirm that its local PV belongs to the
+control node:
+
+```bash
+sudo k3s kubectl get pv \
+  -o custom-columns='CLAIM:.spec.claimRef.name,NODE:.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values[0]'
+```
+
+`postgres-data`, `gzctf-files`, and `wg-config` must show the control node. Do
+not delete a bound PVC that contains production data. Migrate or restore its
+data first. On an empty first-time installation, incorrect PVCs can be deleted
+and recreated after fixing node placement.
+
+## TLS and Cloudflare troubleshooting
+
+A Cloudflare `522` means Cloudflare could not reach the origin; waiting for DNS
+propagation does not fix an origin firewall, stale `AAAA` record, or incorrect
+IP address.
+
+Check the origin:
+
+```bash
+sudo k3s kubectl -n kube-system get pods,service -o wide | grep traefik
+sudo k3s kubectl -n kube-system logs deployment/traefik --tail=100
+sudo k3s kubectl -n gzctf get ingress
+```
+
+Confirm the GCP rule permits public TCP 80/443 to the control VM and that the
+DNS `A` record contains its static public IP. Keep Cloudflare DNS-only until the
+Traefik log shows a successful ACME certificate issuance.
+
+## Optional A&D access
+
+The helper images are published by this repository's GitHub Actions workflow:
+
+```text
+ghcr.io/endraanugrah12/gzctf-wireguard:main
+ghcr.io/endraanugrah12/gzctf-ssh-jump:main
+```
+
+They must be public or otherwise available through an image-pull secret.
+WireGuard clients route the configured K3s Service CIDR through the gateway.
+The gateway allows only challenge Services carrying GZCTF's resource label;
+platform and `kube-system` Services are not forwarded.
+
+The public optional listeners are:
+
+| Port | Purpose |
+|---|---|
+| UDP 51820 | WireGuard |
+| TCP 22022 | SSH jump access |
+| TCP 2222, 3306, 5432, 6379, 11211, 27017, 9200 | Optional honeypots |
+
+If A&D access is not needed, scale the helpers down after deployment and leave
+their public firewall ports closed:
+
+```bash
+sudo k3s kubectl -n gzctf scale \
+  deployment/wireguard deployment/ssh-jump --replicas=0
+```
+
+## Manifest reference
+
+| File | Purpose |
+|---|---|
+| `00-namespace.yaml` | Platform and challenge namespaces |
+| `05-traefik-config.yaml` | ACME resolver and control-node placement |
+| `10-postgres.yaml` | PostgreSQL PVC, Deployment, and Service |
+| `20-redis.yaml` | Redis Deployment and Service |
+| `30-gzctf-config.yaml` | Application config, secrets, and RBAC |
+| `35-ad-network-policy.yaml` | A&D pod, checker, and WireGuard network policy |
+| `40-gzctf.yaml` | GZCTF PVCs, Deployment, and Service |
+| `45-buildkit-sidecar-patch.yaml` | Pod-local BuildKit builder patch |
+| `50-ingress.yaml` | Public Traefik Ingress |
+| `60-ad-access.yaml` | WireGuard and SSH jump helpers |
+
+The Makefile applies these in dependency order. `45-buildkit-sidecar-patch.yaml`
+is a strategic merge patch and is applied after the generated GZCTF Deployment.
+
+## Kubernetes provider limitations
+
+- Persistent storage is local to the control node unless a different
+  `StorageClass` is configured.
+- This layout has one K3s server, one PostgreSQL replica, and one GZCTF replica;
+  it is not highly available.
+- Kubernetes does not provide Docker-style end-of-game image snapshots, L2
+  bridge isolation, or the Docker KotH leader-cooldown iptables hook. GZCTF
+  records a filesystem change list instead of an image snapshot.
+- The Docker challenge-route watcher is intentionally absent. `PlatformProxy`
+  routes challenge traffic through the primary GZCTF HTTPS/WebSocket endpoint.
+- BuildKit uses privileged mode and must only build trusted repository content.
+
+K3s installation and agent-token behavior are documented in the
+[K3s quick-start guide](https://docs.k3s.io/quick-start). K3s local volume
+behavior is documented under [Volumes and Storage](https://docs.k3s.io/add-ons/storage).
