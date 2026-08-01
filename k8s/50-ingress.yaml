@@ -13,6 +13,7 @@ metadata:
     # k3s Traefik built-in resolver. If using cert-manager instead,
     # remove these and add the matching cluster-issuer annotation.
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.priority: "1"
     traefik.ingress.kubernetes.io/router.tls: "true"
     traefik.ingress.kubernetes.io/router.tls.certresolver: cloudflare
 spec:
@@ -47,7 +48,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: chall.example.com
+    - host: "*.chall.example.com"
       http:
         paths:
           - path: /
