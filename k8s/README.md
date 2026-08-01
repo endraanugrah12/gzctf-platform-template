@@ -118,7 +118,8 @@ field + the `KubernetesConfig.Namespace` setting in the ConfigMap.
 ## Two-node k3s placement
 
 The manifests expect the platform node name to be `gzctf-control`. They pin
-GZCTF, postgres, redis, WireGuard, and SSH there and tolerate this taint:
+Traefik, GZCTF, postgres, redis, WireGuard, and SSH there and tolerate this
+taint:
 
 ```sh
 kubectl taint node gzctf-control CriticalAddonsOnly=true:NoSchedule
