@@ -5,7 +5,7 @@ Scaffolding to run a [GZCTF](https://github.com/GZTimeWalker/GZCTF) instance.
 ## Docker compose
 
 ```sh
-make wizard         # interactive prompts → writes .env + appsettings.json
+make compose-wizard # interactive prompts → writes .env + appsettings.json
 make setup          # creates the external `traefik` docker network
 make platform-up    # starts gzctf + db + cache + traefik
 ```
@@ -65,10 +65,7 @@ can grab a plain compose instead via the panel's "bring your own service" link.
 ## Kubernetes / k3s
 
 ```sh
-$EDITOR k8s/05-traefik-config.yaml  # set ACME email
-$EDITOR k8s/30-gzctf-config.yaml    # set secrets, hostname, control private IP
-$EDITOR k8s/50-ingress.yaml         # set hostname
-
+make wizard                              # choose k8s; generates ignored manifests + secrets
 make KUBECTL='sudo k3s kubectl' k8s-apply
 sudo k3s kubectl -n gzctf rollout status deploy/gzctf
 ```

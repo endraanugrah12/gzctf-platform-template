@@ -5,17 +5,20 @@ SUDO ?=
 COMPOSE = ${SUDO} docker compose -f compose.yml -f compose.challenge-proxy.yml
 COMPOSE_BARE = ${SUDO} docker compose -f compose.yml -f compose.standalone.yml
 
-.PHONY: help wizard setup init-config platform-build platform-up platform-up-no-traefik platform-down platform-restart platform-clean \
+.PHONY: help wizard compose-wizard k8s-wizard setup init-config platform-build platform-up platform-up-no-traefik platform-down platform-restart platform-clean \
         platform-logs gzctf-logs db-logs cache-logs traefik-logs traefik-restart \
         flush-cache pull pull-no-traefik pull-gzctf update update-no-traefik update-gzctf \
         k8s-check k8s-apply k8s-status k8s-logs
 
 KUBECTL ?= kubectl
+K8S_DIR ?= k8s/generated
 
 help:
 	@echo "GZCTF platform make targets:"
 	@echo ""
-	@echo "  wizard           Interactive first-time setup (writes .env + appsettings.json)"
+	@echo "  wizard           Interactive setup; choose Kubernetes or Docker Compose"
+	@echo "  k8s-wizard       Render secret Kubernetes manifests into k8s/generated"
+	@echo "  compose-wizard   Generate compose/.env + compose/appsettings.json"
 	@echo "  setup            One-time bootstrap: create the external `traefik` + `challenges` networks"
 	@echo "  init-config      Generate compose/appsettings.json from the example + .env (auto-runs on platform-up)"
 	@echo "  platform-build   Compatibility alias for pull-gzctf (GZCTF image is prebuilt)"
@@ -44,16 +47,28 @@ help:
 	@echo "  update-no-traefik  Same as 'update' but for the standalone (no-traefik) mode"
 	@echo ""
 	@echo "Kubernetes / k3s:"
-	@echo "  k8s-check        Refuse deployment while CHANGE_ME placeholders remain"
+	@echo "  k8s-check        Validate the wizard-generated manifests"
 	@echo "  k8s-apply        Validate and apply all manifests in dependency order"
 	@echo "  k8s-status       Show platform and challenge pods with node placement"
 	@echo "  k8s-logs         Tail the GZCTF pod"
 	@echo ""
 	@echo "First-time setup:"
-	@echo "  make wizard && make setup && make platform-up"
-	@echo "  (the wizard prompts for PUBLIC_ENTRY + optional SMTP/captcha, generates an admin password)"
+	@echo "  Kubernetes: make wizard && make KUBECTL='sudo k3s kubectl' k8s-apply"
+	@echo "  Compose:    make compose-wizard && make setup && make platform-up"
 
 wizard:
+	@printf "Deployment target [k8s/compose] (k8s): "; \
+		read -r target || target=""; \
+		case "$$target" in \
+			""|k8s|kubernetes) exec sh scripts/k8s-wizard.sh ;; \
+			compose|docker) exec sh scripts/wizard.sh ;; \
+			*) echo "Choose 'k8s' or 'compose'." >&2; exit 1 ;; \
+		esac
+
+k8s-wizard:
+	@sh scripts/k8s-wizard.sh
+
+compose-wizard:
 	@sh scripts/wizard.sh
 
 setup:
@@ -134,24 +149,28 @@ flush-cache:
 	(cd compose && ${COMPOSE} exec cache redis-cli FLUSHALL)
 
 k8s-check:
-	@if grep -nE 'CHANGE_ME|ctf\.example\.com' k8s/*.yaml; then \
+	@test -d "${K8S_DIR}" || { \
+		echo "${K8S_DIR} does not exist. Run 'make wizard' and choose k8s first." >&2; \
+		exit 1; \
+	}
+	@if grep -nE 'CHANGE_ME|ctf\.example\.com' "${K8S_DIR}"/*.yaml; then \
 		echo "Replace every deployment placeholder before deploying." >&2; \
 		exit 1; \
 	fi
-	@${KUBECTL} apply --dry-run=client -f k8s/00-namespace.yaml \
-		-f k8s/05-traefik-config.yaml -f k8s/10-postgres.yaml -f k8s/20-redis.yaml \
-		-f k8s/30-gzctf-config.yaml -f k8s/35-ad-network-policy.yaml \
-		-f k8s/40-gzctf.yaml -f k8s/50-ingress.yaml \
-		-f k8s/60-ad-access.yaml >/dev/null
+	@${KUBECTL} apply --dry-run=client -f "${K8S_DIR}/00-namespace.yaml" \
+		-f "${K8S_DIR}/05-traefik-config.yaml" -f "${K8S_DIR}/10-postgres.yaml" -f "${K8S_DIR}/20-redis.yaml" \
+		-f "${K8S_DIR}/30-gzctf-config.yaml" -f "${K8S_DIR}/35-ad-network-policy.yaml" \
+		-f "${K8S_DIR}/40-gzctf.yaml" -f "${K8S_DIR}/50-ingress.yaml" \
+		-f "${K8S_DIR}/60-ad-access.yaml" >/dev/null
 
 k8s-apply: k8s-check
-	@${KUBECTL} apply -f k8s/00-namespace.yaml
-	@${KUBECTL} apply -f k8s/05-traefik-config.yaml
-	@${KUBECTL} apply -f k8s/30-gzctf-config.yaml
-	@${KUBECTL} apply -f k8s/10-postgres.yaml -f k8s/20-redis.yaml
-	@${KUBECTL} apply -f k8s/35-ad-network-policy.yaml
-	@${KUBECTL} apply -f k8s/40-gzctf.yaml -f k8s/50-ingress.yaml
-	@${KUBECTL} apply -f k8s/60-ad-access.yaml
+	@${KUBECTL} apply -f "${K8S_DIR}/00-namespace.yaml"
+	@${KUBECTL} apply -f "${K8S_DIR}/05-traefik-config.yaml"
+	@${KUBECTL} apply -f "${K8S_DIR}/30-gzctf-config.yaml"
+	@${KUBECTL} apply -f "${K8S_DIR}/10-postgres.yaml" -f "${K8S_DIR}/20-redis.yaml"
+	@${KUBECTL} apply -f "${K8S_DIR}/35-ad-network-policy.yaml"
+	@${KUBECTL} apply -f "${K8S_DIR}/40-gzctf.yaml" -f "${K8S_DIR}/50-ingress.yaml"
+	@${KUBECTL} apply -f "${K8S_DIR}/60-ad-access.yaml"
 
 k8s-status:
 	@${KUBECTL} -n gzctf get pods -o wide

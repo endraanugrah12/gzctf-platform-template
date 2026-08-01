@@ -9,30 +9,35 @@ the host's docker socket.
 ## Quick start
 
 ```sh
-# 1. Fill in secrets, hostnames, and the control VM's private IP.
-$EDITOR 05-traefik-config.yaml
-$EDITOR 30-gzctf-config.yaml
-$EDITOR 50-ingress.yaml
+# 1. From the repository root, run the interactive setup and choose k8s.
+make wizard
 
-# 2. From the repository root, validate and apply in order.
-# For k3s, use: make KUBECTL='sudo k3s kubectl' k8s-apply
-make k8s-apply
+# 2. Validate and apply the generated manifests in dependency order.
+make KUBECTL='sudo k3s kubectl' k8s-apply
 
 # 3. Watch the gzctf pod come up
-kubectl -n gzctf rollout status deploy/gzctf
+sudo k3s kubectl -n gzctf rollout status deploy/gzctf
 ```
+
+The wizard asks for the public hostname, ACME email, control VM private IP,
+control node name, and K3s Service CIDR. It generates all secrets and renders
+the result under `k8s/generated/`. That directory is mode `0700`, its files are
+mode `0600`, and it is gitignored.
+
+Back up the generated directory securely after setup. In particular, losing or
+rotating the generated XOR key makes encrypted registry and repository
+credentials already stored in PostgreSQL unreadable.
 
 ### Secrets
 
-The tracked Secret contains placeholders so no deployment credentials enter
-git. Replace the four secret placeholders and control-IP placeholder in
-`30-gzctf-config.yaml`, or remove
-the Secret document from that file and create it separately:
+The normal wizard handles secrets automatically. To manage them manually,
+remove the Secret document from your generated `30-gzctf-config.yaml` and
+create it separately:
 
 ```sh
-kubectl apply -f 00-namespace.yaml
+sudo k3s kubectl apply -f k8s/generated/00-namespace.yaml
 
-kubectl -n gzctf create secret generic gzctf-secrets \
+sudo k3s kubectl -n gzctf create secret generic gzctf-secrets \
   --from-literal=postgres-password="$(openssl rand -hex 16)" \
   --from-literal=xor-key="$(openssl rand -hex 32)" \
   --from-literal=admin-password="Aa1$(openssl rand -hex 12)" \
@@ -40,14 +45,14 @@ kubectl -n gzctf create secret generic gzctf-secrets \
   --from-literal=smtp-username="" \
   --from-literal=smtp-password=""
 
-# Do not subsequently apply the placeholder Secret document from
-# 30-gzctf-config.yaml; it would replace these generated values.
+# Do not subsequently apply the Secret document from
+# 30-gzctf-config.yaml; it would replace these separately managed values.
 ```
 
 Read the admin password back when you need to log in:
 
 ```sh
-kubectl -n gzctf get secret gzctf-secrets -o jsonpath='{.data.admin-password}' | base64 -d
+sudo k3s kubectl -n gzctf get secret gzctf-secrets -o jsonpath='{.data.admin-password}' | base64 -d
 ```
 
 > **Don't rotate `xor-key` after first boot** — gzctf uses it to
