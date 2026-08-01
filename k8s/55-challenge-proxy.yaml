@@ -1,0 +1,88 @@
+# Discovers GZCTF challenge Services, probes for HTTP, and creates one Traefik
+# Ingress per HTTP instance. Raw TCP services keep their NodePort entry.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gzctf-challenge-proxy
+  namespace: gzctf
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gzctf-challenge-proxy
+  namespace: gzctf-challenges
+rules:
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, patch, delete]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gzctf-challenge-proxy
+  namespace: gzctf-challenges
+subjects:
+  - kind: ServiceAccount
+    name: gzctf-challenge-proxy
+    namespace: gzctf
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gzctf-challenge-proxy
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: challenge-proxy
+  namespace: gzctf
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: challenge-proxy
+  template:
+    metadata:
+      labels:
+        app: challenge-proxy
+    spec:
+      serviceAccountName: gzctf-challenge-proxy
+      nodeSelector:
+        kubernetes.io/hostname: gzctf-control
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: watcher
+          image: ghcr.io/endraanugrah12/gzctf-k8s-challenge-proxy:main
+          imagePullPolicy: Always
+          env:
+            - name: CHALLENGE_NAMESPACE
+              value: gzctf-challenges
+            - name: ROUTE_BASE_DOMAIN
+              value: chall.example.com
+            - name: POLL_SECONDS
+              value: "10"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 24Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true

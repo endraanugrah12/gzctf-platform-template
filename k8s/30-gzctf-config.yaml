@@ -99,7 +99,7 @@ data:
       "XorKey": "__XOR_KEY__",
       "ContainerProvider": {
         "Type": "Kubernetes",
-        "PortMappingType": "PlatformProxy",
+        "PortMappingType": "Default",
         "EnableTrafficCapture": true,
         "PublicEntry": "ctf.example.com",
         "DockerConfig": {
@@ -116,7 +116,7 @@ data:
         }
       },
       "PublicChallengeRouteConfig": {
-        "BaseDomain": ""
+        "BaseDomain": "chall.example.com"
       },
       "SubmissionEvidencePolicy": {
         "Enabled": true,

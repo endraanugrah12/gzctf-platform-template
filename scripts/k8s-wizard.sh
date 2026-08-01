@@ -8,8 +8,8 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-SOURCE_DIR="k8s"
-OUTPUT_DIR="k8s/generated"
+SOURCE_DIR=${K8S_SOURCE_DIR:-k8s}
+OUTPUT_DIR=${K8S_OUTPUT_DIR:-k8s/generated}
 
 if [ -e "$OUTPUT_DIR" ]; then
     echo "$OUTPUT_DIR already exists; leaving it unchanged." >&2
@@ -41,6 +41,21 @@ prompt() {
     fi
     read -r _value || _value=""
     [ -n "$_value" ] || _value=$_default
+    export "$_var=$_value"
+}
+
+prompt_secret() {
+    _label=$1
+    _var=$2
+    printf "%s%s%s: " "$BOLD" "$_label" "$RESET"
+    if [ -t 0 ]; then
+        stty -echo
+        read -r _value || _value=""
+        stty echo
+        printf '\n'
+    else
+        read -r _value || _value=""
+    fi
     export "$_var=$_value"
 }
 
@@ -101,6 +116,24 @@ while :; do
 done
 
 while :; do
+    prompt "Challenge wildcard base domain" "chall.$PUBLIC_ENTRY" CHALLENGE_BASE_DOMAIN
+    case "$CHALLENGE_BASE_DOMAIN" in
+        chall.example.com|""|\*.*|*/*|*:*|.*|*.|*..*|*[!a-z0-9.-]*)
+            echo "Enter a DNS suffix such as chall.$PUBLIC_ENTRY (without *. or https://)." >&2 ;;
+        *.*)
+            if [ "${#CHALLENGE_BASE_DOMAIN}" -le 253 ]; then break; fi
+            echo "The hostname is longer than 253 characters." >&2 ;;
+        *) echo "The hostname must contain at least one dot." >&2 ;;
+    esac
+done
+
+while :; do
+    prompt_secret "Cloudflare DNS API token" CLOUDFLARE_DNS_API_TOKEN
+    if [ -n "$CLOUDFLARE_DNS_API_TOKEN" ]; then break; fi
+    echo "The Cloudflare DNS API token is required for wildcard TLS." >&2
+done
+
+while :; do
     prompt "Let's Encrypt email" "admin@$PUBLIC_ENTRY" ACME_EMAIL
     case "$ACME_EMAIL" in
         *@*.*) break ;;
@@ -137,6 +170,8 @@ ADMIN_PASSWORD="Aa1$(openssl rand -hex 12)"
 AD_SSH_INTERNAL_SECRET=$(openssl rand -hex 32)
 
 PUBLIC_ENTRY_ESC=$(escape_sed "$PUBLIC_ENTRY")
+CHALLENGE_BASE_DOMAIN_ESC=$(escape_sed "$CHALLENGE_BASE_DOMAIN")
+CLOUDFLARE_DNS_API_TOKEN_ESC=$(escape_sed "$CLOUDFLARE_DNS_API_TOKEN")
 ACME_EMAIL_ESC=$(escape_sed "$ACME_EMAIL")
 CONTROL_PRIVATE_IP_ESC=$(escape_sed "$CONTROL_PRIVATE_IP")
 CONTROL_NODE_NAME_ESC=$(escape_sed "$CONTROL_NODE_NAME")
@@ -147,12 +182,14 @@ for source in "$SOURCE_DIR"/*.yaml; do
     destination="$OUTPUT_DIR/$(basename "$source")"
     sed \
         -e "s|CHANGE_ME_ACME_EMAIL|$ACME_EMAIL_ESC|g" \
+        -e "s|CHANGE_ME_CLOUDFLARE_DNS_API_TOKEN|$CLOUDFLARE_DNS_API_TOKEN_ESC|g" \
         -e "s|CHANGE_ME_postgres_password|$POSTGRES_PASSWORD|g" \
         -e "s|CHANGE_ME_64_hex_chars_xor_key__________________________________|$XOR_KEY|g" \
         -e "s|CHANGE_ME_admin_password|$ADMIN_PASSWORD|g" \
         -e "s|CHANGE_ME_ad_ssh_internal_secret|$AD_SSH_INTERNAL_SECRET|g" \
         -e "s|CHANGE_ME_CONTROL_PRIVATE_IP|$CONTROL_PRIVATE_IP_ESC|g" \
         -e "s|ctf\.example\.com|$PUBLIC_ENTRY_ESC|g" \
+        -e "s|chall\.example\.com|$CHALLENGE_BASE_DOMAIN_ESC|g" \
         -e "s|gzctf-control|$CONTROL_NODE_NAME_ESC|g" \
         -e "s|10\.43\.0\.0/16|$SERVICE_CIDR_ESC|g" \
         "$source" > "$destination"
@@ -164,6 +201,7 @@ cat <<EOF
 ${BOLD}Kubernetes configuration generated.${RESET}
 
   Public URL:        https://$PUBLIC_ENTRY
+  Challenge routes:  https://*.$CHALLENGE_BASE_DOMAIN
   Control private IP: $CONTROL_PRIVATE_IP
   Control node:       $CONTROL_NODE_NAME
   Manifests:          $OUTPUT_DIR

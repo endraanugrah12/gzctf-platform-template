@@ -6,6 +6,7 @@ on:
     paths:
       - wireguard/**
       - ssh-jump/**
+      - k8s/challenge-proxy/**
       - .github/workflows/publish-helper-images.yml
   workflow_dispatch:
 
@@ -22,6 +23,8 @@ jobs:
             image: gzctf-wireguard
           - context: ssh-jump
             image: gzctf-ssh-jump
+          - context: k8s/challenge-proxy
+            image: gzctf-k8s-challenge-proxy
     steps:
       - uses: actions/checkout@v6
       - uses: docker/setup-buildx-action@v4

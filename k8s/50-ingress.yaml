@@ -11,10 +11,10 @@ metadata:
   namespace: gzctf
   annotations:
     # k3s Traefik built-in resolver. If using cert-manager instead,
-    # remove these and add: cert-manager.io/cluster-issuer: letsencrypt
+    # remove these and add the matching cluster-issuer annotation.
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
-    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+    traefik.ingress.kubernetes.io/router.tls.certresolver: cloudflare
 spec:
   ingressClassName: traefik
   rules:
@@ -29,3 +29,32 @@ spec:
                 port: { number: 80 }
   tls:
     - hosts: [ctf.example.com]      # ← CHANGE ME
+
+---
+# Bootstrap one wildcard certificate for every ephemeral HTTP challenge route.
+# Dynamic per-instance Ingresses created by challenge-proxy reuse this cert and
+# therefore do not consume one Let's Encrypt certificate per team instance.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gzctf-challenge-certificate
+  namespace: gzctf
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: cloudflare
+    traefik.ingress.kubernetes.io/router.tls.domains.0.main: "*.chall.example.com"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: chall.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gzctf
+                port: { number: 80 }
+  tls:
+    - hosts: ["*.chall.example.com"]

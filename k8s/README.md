@@ -14,6 +14,7 @@ gzctf-control
   - GZCTF, PostgreSQL, Redis
   - persistent platform files
   - BuildKit challenge-image builder
+  - HTTP challenge-route watcher
   |
   | private VPC
   v
@@ -22,8 +23,10 @@ gzctf-worker
   - player challenge pods
 ```
 
-GZCTF uses `PlatformProxy`, so players reach dynamic challenges through the
-main HTTPS hostname. Challenge pods do not need public node ports.
+HTTP challenge instances receive a per-team HTTPS hostname under a wildcard
+DNS suffix. The route watcher probes each challenge Service and creates a
+Traefik Ingress only when the backend speaks HTTP. Raw TCP challenges retain a
+Kubernetes NodePort instead of using GZCTF's WebSocket proxy.
 
 This is a two-node deployment, not a highly available deployment. Losing the
 control VM makes the platform and its local persistent volumes unavailable.
@@ -32,7 +35,10 @@ control VM makes the platform and its local persistent volumes unavailable.
 
 - Two Linux VMs in the same private network. Ubuntu 24.04 is tested.
 - A static public IPv4 address on the control VM.
-- A DNS hostname such as `ctf.example.com` pointing to that address.
+- A platform hostname such as `ctf.example.com` and a wildcard challenge record
+  such as `*.chall.ctf.example.com`, both pointing to that address.
+- A Cloudflare API token scoped to the DNS zone with `Zone:DNS:Edit` and
+  `Zone:Zone:Read`. Traefik uses it only for ACME DNS-01 records.
 - Outbound internet access from both VMs for images and package downloads.
 - `git`, `make`, `curl`, and `openssl` on the control VM.
 - At least 4 vCPU / 8 GiB RAM on the control VM. BuildKit can use up to an
@@ -50,7 +56,7 @@ subnet or, preferably, the two node network tags.
 
 | Source | Target | Ports | Purpose |
 |---|---|---|---|
-| Internet | control VM | TCP 80, 443 | HTTP-01 validation and the platform |
+| Internet | control VM | TCP 80, 443 | Platform and HTTP challenge routes |
 | Private subnet | control VM | TCP 6443 | Kubernetes API / agent join |
 | Private subnet | both nodes | TCP 10250 | Kubelet communication |
 | Private subnet | both nodes | UDP 8472 | Flannel VXLAN |
@@ -61,6 +67,11 @@ Optional A&D access also needs UDP 51820 and TCP 22022 from the Internet to the
 control VM. Only expose the honeypot ports listed later if the event actually
 uses them. Never expose PostgreSQL, Redis, TCP 6443, TCP 8080, TCP 10250, or UDP
 8472 publicly.
+
+Raw TCP instances use NodePorts in TCP `30000-32767`. Leave that range closed
+unless an event actually has raw TCP challenges. If it is needed, expose it on
+the control VM only and restrict source ranges where practical. Kubernetes
+forwards those NodePorts to challenge pods on the worker.
 
 ## 1. Install K3s
 
@@ -127,16 +138,22 @@ sudo k3s kubectl label node gzctf-worker ctf-role=challenge --overwrite
 
 ## 2. Configure DNS
 
-Create an `A` record for the platform hostname pointing to the control VM's
-static public IPv4 address. Do not create an `AAAA` record unless the VM and
-firewall are actually configured for public IPv6.
+Create these `A` records pointing to the control VM's static public IPv4:
 
-When using Cloudflare, start with the record set to **DNS only**. After Traefik
-has obtained the certificate and direct HTTPS works, the Cloudflare proxy can be
-enabled with SSL/TLS mode set to **Full (strict)**.
+```text
+ctf.example.com
+*.chall.ctf.example.com
+```
 
-Port 80 must remain reachable because the included Traefik configuration uses
-the Let's Encrypt HTTP-01 challenge.
+Do not create an `AAAA` record unless the VM and firewall are actually
+configured for public IPv6.
+
+Start with both records set to **DNS only**. After Traefik has obtained the
+platform and wildcard certificates and direct HTTPS works, the Cloudflare proxy
+can be enabled with SSL/TLS mode set to **Full (strict)**.
+
+The included resolver uses DNS-01, so certificate issuance does not depend on
+port 80. Keep port 80 open if HTTP-to-HTTPS redirects are enabled.
 
 ## 3. Generate the deployment
 
@@ -167,6 +184,9 @@ make wizard
 Choose `k8s` and provide:
 
 - the public hostname without `https://`;
+- the challenge wildcard suffix without `*.` (for example,
+  `chall.ctf.example.com`);
+- a Cloudflare DNS API token with `Zone:DNS:Edit` and `Zone:Zone:Read`;
 - a Let's Encrypt email address;
 - the control VM's private IPv4 address;
 - the Kubernetes control node name, normally `gzctf-control`;
@@ -207,9 +227,9 @@ sudo k3s kubectl -n gzctf-challenges get pods -o wide
 sudo k3s kubectl get ingress -A
 ```
 
-PostgreSQL, Redis, GZCTF, Traefik, WireGuard, and SSH jump should run on the
-control node. Player challenge pods should run on the worker after a challenge
-is launched.
+PostgreSQL, Redis, GZCTF, Traefik, the challenge-proxy watcher, WireGuard, and
+SSH jump should run on the control node. Player challenge pods should run on
+the worker after a challenge is launched.
 
 Retrieve the initial administrator password if it was not recorded:
 
@@ -237,6 +257,29 @@ curl -I http://127.0.0.1:8080
 
 This tests GZCTF directly and bypasses Traefik, Let's Encrypt, Cloudflare, and
 the GCP public firewall.
+
+### Verify challenge routing
+
+Launch an HTTP challenge, then check its Service and generated Ingress:
+
+```bash
+sudo k3s kubectl -n gzctf-challenges get service,ingress
+sudo k3s kubectl -n gzctf logs deployment/challenge-proxy --tail=100
+```
+
+The browser-open action uses the generated `https://<instance-host>/` route.
+The entry field still contains `host:NodePort`, which preserves a direct entry
+for raw TCP clients. HTTP detection and Ingress creation can take up to about
+10 seconds after the challenge begins responding.
+
+The watcher image is published by this repository's helper-image workflow:
+
+```text
+ghcr.io/endraanugrah12/gzctf-k8s-challenge-proxy:main
+```
+
+Make this GHCR package public before deployment, or add an image-pull secret to
+the `challenge-proxy` Deployment.
 
 ## 5. Configure Kubernetes challenge builds
 
@@ -309,6 +352,33 @@ Important repository behavior:
 
 ## Routine operations
 
+### Upgrade an existing generated deployment
+
+`k8s/generated/` is a rendered snapshot, so `git pull` does not add this route
+controller to an existing installation automatically. Preserve the generated
+database password, XOR key, and A&D secret. Do not rerun the wizard with new
+secrets against the existing database.
+
+After pulling this revision:
+
+1. Back up `k8s/generated/`.
+2. Copy the new `05-traefik-config.yaml`, `50-ingress.yaml`, and
+   `55-challenge-proxy.yaml` templates into `k8s/generated/`.
+3. Replace their placeholders with the existing ACME email, control node name,
+   platform hostname, challenge base domain, and Cloudflare token.
+4. In the existing generated `30-gzctf-config.yaml`, change
+   `PortMappingType` to `Default` and set `PublicChallengeRouteConfig.BaseDomain`.
+5. Run the normal apply and restart GZCTF so the moving image tag is refreshed.
+
+```bash
+make KUBECTL='sudo k3s kubectl' k8s-apply
+sudo k3s kubectl -n gzctf rollout restart deployment/gzctf
+sudo k3s kubectl -n gzctf rollout status deployment/gzctf --timeout=600s
+```
+
+Destroy and recreate any challenge instances that existed before the upgrade;
+their Services do not carry the new routing metadata.
+
 ### Status and logs
 
 ```bash
@@ -317,6 +387,7 @@ make KUBECTL='sudo k3s kubectl' k8s-logs
 
 sudo k3s kubectl -n gzctf logs deployment/gzctf -c gzctf --since=15m
 sudo k3s kubectl -n gzctf logs deployment/gzctf -c buildkitd --since=15m
+sudo k3s kubectl -n gzctf logs deployment/challenge-proxy --since=15m
 sudo k3s kubectl -n kube-system logs deployment/traefik --since=15m
 ```
 
@@ -403,9 +474,11 @@ sudo k3s kubectl -n kube-system logs deployment/traefik --tail=100
 sudo k3s kubectl -n gzctf get ingress
 ```
 
-Confirm the GCP rule permits public TCP 80/443 to the control VM and that the
-DNS `A` record contains its static public IP. Keep Cloudflare DNS-only until the
-Traefik log shows a successful ACME certificate issuance.
+Confirm the GCP rule permits public TCP 80/443 to the control VM and that both
+the platform and wildcard DNS `A` records contain its static public IP. Check
+that the Cloudflare token has `Zone:DNS:Edit` and `Zone:Zone:Read`. Keep the
+records DNS-only until the Traefik log shows successful platform and wildcard
+certificate issuance.
 
 ## Optional A&D access
 
@@ -450,6 +523,7 @@ sudo k3s kubectl -n gzctf scale \
 | `40-gzctf.yaml` | GZCTF PVCs, Deployment, and Service |
 | `45-buildkit-sidecar-patch.yaml` | Pod-local BuildKit builder patch |
 | `50-ingress.yaml` | Public Traefik Ingress |
+| `55-challenge-proxy.yaml` | HTTP challenge route watcher and scoped RBAC |
 | `60-ad-access.yaml` | WireGuard and SSH jump helpers |
 
 The Makefile applies these in dependency order. `45-buildkit-sidecar-patch.yaml`
@@ -464,10 +538,16 @@ is a strategic merge patch and is applied after the generated GZCTF Deployment.
 - Kubernetes does not provide Docker-style end-of-game image snapshots, L2
   bridge isolation, or the Docker KotH leader-cooldown iptables hook. GZCTF
   records a filesystem change list instead of an image snapshot.
-- The Docker challenge-route watcher is intentionally absent. `PlatformProxy`
-  routes challenge traffic through the primary GZCTF HTTPS/WebSocket endpoint.
+- Automatic friendly routes apply only to HTTP backends. Raw TCP challenges use
+  NodePorts and require a deliberate firewall rule for TCP `30000-32767`, or a
+  separate TCP access design such as the event VPN.
+- The route watcher polls every 10 seconds, so a new HTTP instance is not
+  reachable immediately after its pod starts.
 - BuildKit uses privileged mode and must only build trusted repository content.
 
 K3s installation and agent-token behavior are documented in the
 [K3s quick-start guide](https://docs.k3s.io/quick-start). K3s local volume
 behavior is documented under [Volumes and Storage](https://docs.k3s.io/add-ons/storage).
+See Traefik's [ACME resolver documentation](https://doc.traefik.io/traefik/reference/install-configuration/tls/certificate-resolvers/acme/)
+for wildcard DNS-01 behavior and lego's [Cloudflare provider documentation](https://go-acme.github.io/lego/dns/cloudflare/)
+for the required API-token permissions.

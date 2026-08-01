@@ -154,7 +154,7 @@ k8s-check:
 		echo "${K8S_DIR} does not exist. Run 'make wizard' and choose k8s first." >&2; \
 		exit 1; \
 	}
-	@if grep -nE 'CHANGE_ME|ctf\.example\.com' "${K8S_DIR}"/*.yaml; then \
+	@if grep -nE 'CHANGE_ME|(ctf|chall)\.example\.com' "${K8S_DIR}"/*.yaml; then \
 		echo "Replace every deployment placeholder before deploying." >&2; \
 		exit 1; \
 	fi
@@ -162,6 +162,7 @@ k8s-check:
 		-f "${K8S_DIR}/05-traefik-config.yaml" -f "${K8S_DIR}/10-postgres.yaml" -f "${K8S_DIR}/20-redis.yaml" \
 		-f "${K8S_DIR}/30-gzctf-config.yaml" -f "${K8S_DIR}/35-ad-network-policy.yaml" \
 		-f "${K8S_DIR}/40-gzctf.yaml" -f "${K8S_DIR}/50-ingress.yaml" \
+		-f "${K8S_DIR}/55-challenge-proxy.yaml" \
 		-f "${K8S_DIR}/60-ad-access.yaml" >/dev/null
 
 k8s-apply: k8s-check
@@ -171,6 +172,7 @@ k8s-apply: k8s-check
 	@${KUBECTL} apply -f "${K8S_DIR}/10-postgres.yaml" -f "${K8S_DIR}/20-redis.yaml"
 	@${KUBECTL} apply -f "${K8S_DIR}/35-ad-network-policy.yaml"
 	@${KUBECTL} apply -f "${K8S_DIR}/40-gzctf.yaml" -f "${K8S_DIR}/50-ingress.yaml"
+	@${KUBECTL} apply -f "${K8S_DIR}/55-challenge-proxy.yaml"
 	@$(MAKE) --no-print-directory KUBECTL='${KUBECTL}' k8s-buildkit
 	@${KUBECTL} apply -f "${K8S_DIR}/60-ad-access.yaml"
 

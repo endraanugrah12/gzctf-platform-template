@@ -1,5 +1,17 @@
-# Static ACME configuration for the Traefik instance packaged with k3s.
-# The Ingress annotation in 50-ingress.yaml references this resolver by name.
+# Cloudflare DNS credentials used by Traefik's ACME DNS-01 resolver. The token
+# needs Zone:DNS:Edit and Zone:Zone:Read for the relevant zone.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: traefik-cloudflare-dns
+  namespace: kube-system
+type: Opaque
+stringData:
+  api-token: "CHANGE_ME_CLOUDFLARE_DNS_API_TOKEN"
+
+---
+# Static ACME configuration for the Traefik instance packaged with k3s. DNS-01
+# is required to issue the wildcard challenge certificate in 50-ingress.yaml.
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -8,9 +20,17 @@ metadata:
 spec:
   valuesContent: |-
     additionalArguments:
-      - "--certificatesresolvers.letsencrypt.acme.email=CHANGE_ME_ACME_EMAIL"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.cloudflare.acme.email=CHANGE_ME_ACME_EMAIL"
+      - "--certificatesresolvers.cloudflare.acme.storage=/data/acme.json"
+      - "--certificatesresolvers.cloudflare.acme.dnschallenge=true"
+      - "--certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
+      - "--certificatesresolvers.cloudflare.acme.dnschallenge.delaybeforecheck=15"
+    env:
+      - name: CF_DNS_API_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: traefik-cloudflare-dns
+            key: api-token
     persistence:
       enabled: true
       name: data

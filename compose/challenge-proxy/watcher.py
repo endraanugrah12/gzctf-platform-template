@@ -39,6 +39,13 @@ def slugify(value: str) -> str:
     return value.strip("-") or "challenge"
 
 
+def instance_label(slug: str, challenge_id: str, team_id: str) -> str:
+    suffix = f"-c{challenge_id}-t{team_id}"
+    max_slug_length = max(1, 63 - len(suffix))
+    route_slug = slugify(slug)[:max_slug_length].rstrip("-") or "c"
+    return f"{route_slug}{suffix}"
+
+
 def extract_internal_port(info: dict) -> int | None:
     ports = (((info.get("NetworkSettings") or {}).get("Ports")) or {})
     for key in ports.keys():
@@ -112,8 +119,8 @@ def build_routes():
 
         name = (info.get("Name") or "").lstrip("/")
         slug = slugify(labels.get("ChallengeSlug") or name.split("_", 1)[0])
-        host = f"{slug}-c{challenge_id}-t{team_id}.{ROUTE_BASE_DOMAIN}"
-        route_id = slugify(f"{slug}-c{challenge_id}-t{team_id}")
+        route_id = instance_label(slug, challenge_id, team_id)
+        host = f"{route_id}.{ROUTE_BASE_DOMAIN}"
 
         metadata = {
             "container_name": name,
