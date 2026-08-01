@@ -1,0 +1,52 @@
+# Strategic-merge patch applied after the generated GZCTF Deployment.
+# BuildKit is pod-local: buildctl and buildkitd communicate only through a
+# Unix socket, so the build API and forwarded registry credentials are never
+# exposed as a cluster TCP service. The daemon is privileged because Ubuntu
+# 24.04 blocks rootlesskit's unprivileged user namespace by default.
+spec:
+  template:
+    spec:
+      containers:
+        - name: gzctf
+          volumeMounts:
+            - name: buildkit-socket
+              mountPath: /run/buildkit
+        - name: buildkitd
+          image: moby/buildkit:v0.30.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --addr
+            - unix:///run/buildkit/buildkitd.sock
+          securityContext:
+            privileged: true
+          readinessProbe:
+            exec:
+              command:
+                - buildctl
+                - --addr
+                - unix:///run/buildkit/buildkitd.sock
+                - debug
+                - workers
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+              ephemeral-storage: 20Gi
+          volumeMounts:
+            - name: buildkit-socket
+              mountPath: /run/buildkit
+            - name: buildkit-cache
+              mountPath: /var/lib/buildkit
+      volumes:
+        - name: buildkit-socket
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: buildkit-cache
+          emptyDir:
+            sizeLimit: 20Gi

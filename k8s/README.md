@@ -74,6 +74,7 @@ publicly reachable for the HTTP-01 challenge.
 | `30-gzctf-config.yaml` | ConfigMap holding `appsettings.json` (Kubernetes provider mode) + Secret for db password + ServiceAccount with RBAC for spawning challenge pods |
 | `35-ad-network-policy.yaml` | A&D pod-to-pod, checker, and restricted WireGuard ingress |
 | `40-gzctf.yaml` | PVC for `/app/files` + Deployment + Service for gzctf |
+| `45-buildkit-sidecar-patch.yaml` | Pod-local BuildKit sidecar used by repository-bound challenge builds |
 | `50-ingress.yaml` | Traefik ingress using the built-in ACME resolver |
 | `60-ad-access.yaml` | WireGuard and SSH jump access for A&D challenges |
 
@@ -94,6 +95,16 @@ The Deployments ship with conservative resource requests/limits
 matching the docker-compose `deploy.resources` block. Bump
 `spec.template.spec.containers[].resources` if your CTF has > 50
 concurrent participants.
+
+Repository-bound challenge builds use a pod-local BuildKit sidecar in the GZCTF
+pod. Its cache is capped at 20 GiB of ephemeral storage and the process is capped
+at 2 CPUs / 3 GiB RAM. The daemon requires a privileged container on Ubuntu 24.04,
+so bind only administrator-controlled repositories. Its API is available only
+through a shared Unix socket, not a cluster service. Configure **Build Registry**
+in Admin Settings before building: for GHCR use `ghcr.io`, your lowercase
+account/organization as the namespace, your GitHub username, and a package-write
+token. The resulting pull secret is maintained automatically in
+`gzctf-challenges`, including across platform restarts.
 
 ## Storage
 

@@ -8,7 +8,7 @@ COMPOSE_BARE = ${SUDO} docker compose -f compose.yml -f compose.standalone.yml
 .PHONY: help wizard compose-wizard k8s-wizard setup init-config platform-build platform-up platform-up-no-traefik platform-down platform-restart platform-clean \
         platform-logs gzctf-logs db-logs cache-logs traefik-logs traefik-restart \
         flush-cache pull pull-no-traefik pull-gzctf update update-no-traefik update-gzctf \
-        k8s-check k8s-apply k8s-status k8s-logs
+        k8s-check k8s-apply k8s-buildkit k8s-status k8s-logs
 
 KUBECTL ?= kubectl
 K8S_DIR ?= k8s/generated
@@ -49,6 +49,7 @@ help:
 	@echo "Kubernetes / k3s:"
 	@echo "  k8s-check        Validate the wizard-generated manifests"
 	@echo "  k8s-apply        Validate and apply all manifests in dependency order"
+	@echo "  k8s-buildkit     Enable the pod-local BuildKit challenge-build sidecar"
 	@echo "  k8s-status       Show platform and challenge pods with node placement"
 	@echo "  k8s-logs         Tail the GZCTF pod"
 	@echo ""
@@ -170,7 +171,12 @@ k8s-apply: k8s-check
 	@${KUBECTL} apply -f "${K8S_DIR}/10-postgres.yaml" -f "${K8S_DIR}/20-redis.yaml"
 	@${KUBECTL} apply -f "${K8S_DIR}/35-ad-network-policy.yaml"
 	@${KUBECTL} apply -f "${K8S_DIR}/40-gzctf.yaml" -f "${K8S_DIR}/50-ingress.yaml"
+	@$(MAKE) --no-print-directory KUBECTL='${KUBECTL}' k8s-buildkit
 	@${KUBECTL} apply -f "${K8S_DIR}/60-ad-access.yaml"
+
+k8s-buildkit:
+	@${KUBECTL} -n gzctf patch deployment gzctf --type=strategic \
+		--patch-file k8s/45-buildkit-sidecar-patch.yaml
 
 k8s-status:
 	@${KUBECTL} -n gzctf get pods -o wide
