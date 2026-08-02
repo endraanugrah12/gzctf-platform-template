@@ -189,6 +189,12 @@ def reconcile():
         raise RuntimeError(f"Service list failed: HTTP {status}: {response}")
 
     for service in (response or {}).get("items", []):
+        metadata = service.get("metadata") or {}
+        annotations = metadata.get("annotations") or {}
+        if annotations.get("gzctf.gzti.me/PublicHttpRoute", "false").lower() != "true":
+            if metadata.get("name"):
+                delete_ingress(metadata["name"])
+            continue
         details = route_details(service)
         if details is None:
             continue

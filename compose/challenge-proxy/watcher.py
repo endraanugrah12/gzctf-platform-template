@@ -107,6 +107,8 @@ def build_routes():
 
         info = docker_get(f"/containers/{container['Id']}/json")
         labels = ((info.get("Config") or {}).get("Labels")) or {}
+        if labels.get("PublicHttpRoute", "false").lower() != "true":
+            continue
         challenge_id = labels.get("ChallengeId")
         team_id = labels.get("TeamId")
         if not challenge_id or not team_id:

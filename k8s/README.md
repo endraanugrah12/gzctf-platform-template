@@ -285,15 +285,30 @@ sudo k3s kubectl -n gzctf-challenges get service,ingress
 sudo k3s kubectl -n gzctf logs deployment/challenge-proxy --tail=100
 ```
 
-Challenges in the **Web** category display and copy the generated
-`https://<instance-host>/` route on the normal HTTPS port, 443. Different Web
-instances are separated by hostname, not by public port. Keep browser-based
-challenges in that category so the client can present the correct route.
+Enable **Use Public HTTPS Route** on any container challenge that serves HTTP.
+The player UI then displays and copies `https://<instance-host>/` on the normal
+HTTPS port, 443, and the route watcher creates its Ingress after confirming that
+the exposed service speaks HTTP. The setting is independent of challenge
+category.
 
-Pwn and every other category retain `host:NodePort` for raw TCP clients and do
-not show the browser-open action. Arbitrary TCP protocols cannot be transported
-through an HTTP Ingress. HTTP detection and Ingress creation can take up to
-about 10 seconds after the challenge begins responding.
+Leave the option disabled for raw TCP services such as typical pwn challenges.
+Their player entry remains `host:NodePort`, and no HTTP Ingress is created.
+Arbitrary TCP protocols cannot be transported through an HTTP Ingress. HTTP
+detection and Ingress creation can take up to about 10 seconds after the
+challenge begins responding.
+
+Repository-bound challenges can set the same option in `challenge.yml`:
+
+```yaml
+container:
+  containerImage: ghcr.io/example/challenge:latest
+  exposePort: 8080
+  usePublicHttpRoute: true
+```
+
+Changing the option destroys active instances for that challenge because the
+route mode is recorded when its Service is created. Launch the instance again
+after saving or after the next repository sync.
 
 The watcher image is published by this repository's helper-image workflow:
 
