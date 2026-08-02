@@ -285,13 +285,15 @@ sudo k3s kubectl -n gzctf-challenges get service,ingress
 sudo k3s kubectl -n gzctf logs deployment/challenge-proxy --tail=100
 ```
 
-The browser-open action uses the generated `https://<instance-host>/` route on
-the normal HTTPS port, 443. Different HTTP instances are separated by hostname,
-not by public port.
-The entry field still contains `host:NodePort`, which preserves a direct entry
-for raw TCP clients; arbitrary TCP protocols cannot be transported through an
-HTTP Ingress. HTTP detection and Ingress creation can take up to about 10
-seconds after the challenge begins responding.
+Challenges in the **Web** category display and copy the generated
+`https://<instance-host>/` route on the normal HTTPS port, 443. Different Web
+instances are separated by hostname, not by public port. Keep browser-based
+challenges in that category so the client can present the correct route.
+
+Pwn and every other category retain `host:NodePort` for raw TCP clients and do
+not show the browser-open action. Arbitrary TCP protocols cannot be transported
+through an HTTP Ingress. HTTP detection and Ingress creation can take up to
+about 10 seconds after the challenge begins responding.
 
 The watcher image is published by this repository's helper-image workflow:
 
