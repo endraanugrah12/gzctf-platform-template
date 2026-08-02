@@ -1,6 +1,48 @@
-# GZCTF platform template
+# Hack-It-Braw GZCTF platform template
 
-Scaffolding to run a [GZCTF](https://github.com/GZTimeWalker/GZCTF) instance.
+This repository is a fork of
+[TCP1P/gzctf-platform-template](https://github.com/TCP1P/gzctf-platform-template)
+for the Hack-It-Braw deployment. It runs the companion
+[endraanugrah12/GZCTF](https://github.com/endraanugrah12/GZCTF/tree/evidence-routes)
+fork rather than the upstream GZCTF image.
+
+## Changes in this fork
+
+- **Published custom images.** GZCTF runs from
+  `ghcr.io/endraanugrah12/gzctf:evidence-routes`. GitHub Actions also publishes
+  the WireGuard, SSH jump, and Kubernetes challenge-route helper images to
+  GHCR, so the target server does not compile the platform locally.
+- **Two-node K3s deployment.** `make wizard` can render a control/worker setup
+  into `k8s/generated/`. PostgreSQL, Redis, GZCTF, Traefik, persistent files,
+  and access helpers stay on the control node; challenge workloads are placed
+  on the worker.
+- **Per-challenge connection mode.** Any HTTP container challenge can enable
+  **Use Public HTTPS Route** and receive a wildcard
+  `https://<instance>.chall.example.com` route through Traefik. Raw TCP
+  challenges retain `host:NodePort`; their public firewall must deliberately
+  allow TCP `30000-32767`. The choice is independent of challenge category and
+  can also be set by repository binding with
+  `container.usePublicHttpRoute: true`.
+- **No Kubernetes WebSocket proxy requirement.** The Kubernetes provider is
+  forced to direct port mapping after database-backed configuration is loaded,
+  preventing an old `PlatformProxy` setting from restoring `wss://` instance
+  entries.
+- **Repository builds on Kubernetes.** A pod-local BuildKit sidecar builds
+  trusted repository-bound challenges and pushes them to an operator-configured
+  registry that worker nodes can pull from.
+- **Submission evidence controls.** The custom application adds submission
+  evidence storage and review, solver-file handling, and configurable allowed
+  LLM share-link hosts, including dotted domain names.
+- **A&D access on K3s.** The manifests carry over the restricted WireGuard
+  gateway, SSH jump service, honeypot listeners, scoped RBAC, and challenge
+  network policy required by the fork's Attack & Defense features.
+- **Makefile-driven operations.** The wizard, apply, status, log, and BuildKit
+  targets provide a repeatable path for both Docker Compose and K3s installs.
+
+Generated deployment files and secrets under `k8s/generated/` are intentionally
+ignored by Git. Consequently, `git pull` updates the templates but does not
+rewrite an existing deployment. Review
+[`k8s/README.md`](k8s/README.md) before upgrading or exposing firewall ports.
 
 ## Docker compose
 
@@ -72,7 +114,7 @@ sudo k3s kubectl -n gzctf rollout status deploy/gzctf
 
 The Kubernetes path uses the custom GZCTF image and carries over the A&D SSH
 jump, restricted WireGuard gateway, honeypot listeners, first-boot admin seed,
-submission-evidence policy, and PlatformProxy routing. See
+submission-evidence policy, direct HTTPS routes, and raw TCP NodePorts. See
 [`k8s/README.md`](k8s/README.md) for
 node placement, firewall ports, storage, RBAC, and the remaining provider
 limitations.
