@@ -260,6 +260,24 @@ the GCP public firewall.
 
 ### Verify challenge routing
 
+This fork forces `ContainerProvider.PortMappingType=Default` whenever the
+active provider is Kubernetes. The runtime override is applied after the
+database configuration provider, so a migrated
+`ContainerProvider:PortMappingType=PlatformProxy` row cannot silently restore
+WebSocket proxy mode. If `PublicChallengeRouteConfig.BaseDomain` is empty, it
+defaults to `chall.<ContainerProvider.PublicEntry>`.
+
+Verify the effective client configuration before launching an instance:
+
+```bash
+curl -fsS https://ctf.example.com/api/config | jq \
+  '{portMapping, challengeBaseDomain}'
+```
+
+The result must report `Default` and the expected challenge base domain. An
+instance created before this takes effect retains its old UUID proxy entry and
+ClusterIP Service; destroy and recreate it after upgrading.
+
 Launch an HTTP challenge, then check its Service and generated Ingress:
 
 ```bash
@@ -267,10 +285,13 @@ sudo k3s kubectl -n gzctf-challenges get service,ingress
 sudo k3s kubectl -n gzctf logs deployment/challenge-proxy --tail=100
 ```
 
-The browser-open action uses the generated `https://<instance-host>/` route.
+The browser-open action uses the generated `https://<instance-host>/` route on
+the normal HTTPS port, 443. Different HTTP instances are separated by hostname,
+not by public port.
 The entry field still contains `host:NodePort`, which preserves a direct entry
-for raw TCP clients. HTTP detection and Ingress creation can take up to about
-10 seconds after the challenge begins responding.
+for raw TCP clients; arbitrary TCP protocols cannot be transported through an
+HTTP Ingress. HTTP detection and Ingress creation can take up to about 10
+seconds after the challenge begins responding.
 
 The watcher image is published by this repository's helper-image workflow:
 
