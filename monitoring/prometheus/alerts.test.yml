@@ -1,0 +1,26 @@
+rule_files:
+  - alerts.yml
+evaluation_interval: 30s
+tests:
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node",instance="127.0.0.1:19100"}'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MonitoringTargetDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: node
+              instance: 127.0.0.1:19100
+            exp_annotations:
+              summary: Metrics target node is unavailable
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node",instance="127.0.0.1:19100"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MonitoringTargetDown
+        exp_alerts: []

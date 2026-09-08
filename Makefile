@@ -5,6 +5,30 @@ SUDO ?=
 LOCAL_GZCTF_IMAGE ?= gzctf-local:big-update
 COMPOSE = ${SUDO} docker compose -f compose.yml -f compose.challenge-proxy.yml
 COMPOSE_BARE = ${SUDO} docker compose -f compose.yml -f compose.standalone.yml
+MONITORING = ${SUDO} docker compose --project-directory monitoring -f monitoring/compose.yml
+
+.PHONY: monitoring-init monitoring-check monitoring-up monitoring-down monitoring-status monitoring-logs
+monitoring-init:
+	@sh scripts/monitoring-init.sh
+
+monitoring-check: monitoring-init
+	@${MONITORING} config --quiet
+	@${MONITORING} run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml
+	@${MONITORING} run --rm --no-deps --entrypoint promtool prometheus test rules /etc/prometheus/alerts.test.yml
+
+monitoring-up: monitoring-check
+	@${MONITORING} up -d
+
+monitoring-down:
+	@${MONITORING} down
+
+monitoring-status:
+	@${MONITORING} ps
+
+monitoring-logs:
+	@${MONITORING} logs --tail=100 -f
+
+.DEFAULT_GOAL := help
 
 .PHONY: help wizard compose-wizard k8s-wizard setup init-config platform-build platform-up platform-up-no-traefik platform-down platform-restart platform-clean \
         platform-logs gzctf-logs db-logs cache-logs traefik-logs traefik-restart \
@@ -53,6 +77,13 @@ help:
 	@echo "  k8s-buildkit     Enable the pod-local BuildKit challenge-build sidecar"
 	@echo "  k8s-status       Show platform and challenge pods with node placement"
 	@echo "  k8s-logs         Tail the GZCTF pod"
+	@echo ""
+	@echo "Optional monitoring (independent Compose project):"
+	@echo "  monitoring-init  Generate private Grafana credentials once"
+	@echo "  monitoring-check Validate configuration and alert rules"
+	@echo "  monitoring-up    Start private Grafana, Prometheus and exporters"
+	@echo "  monitoring-down Stop monitoring, preserving its data"
+	@echo "  monitoring-status / monitoring-logs  Inspect monitoring services"
 	@echo ""
 	@echo "First-time setup:"
 	@echo "  Kubernetes: make wizard && make KUBECTL='sudo k3s kubectl' k8s-apply"

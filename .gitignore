@@ -5,6 +5,7 @@ compose/appsettings.json
 # Per-operator env — contains XOR_KEY + ADMIN_PASSWORD after first
 # `make wizard` / `make platform-up`. Copy from compose/.env.example.
 compose/.env
+monitoring/.env
 
 # Local checkout of the custom GZCTF source. Keep this as a separate
 # repo or submodule; the platform template only needs the path at build time.

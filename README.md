@@ -47,6 +47,14 @@ rewrite an existing deployment. Review
 
 ## Docker compose
 
+Optional infrastructure monitoring: run `make monitoring-up` for private
+Prometheus + Grafana dashboards with host/container metrics and resource alerts.
+See [monitoring setup and SSH access](docs/monitoring.md). It runs independently
+of GZCTF and can also monitor a backup challenge VPS.
+
+For a second VPS hosting backup challenge services (without another GZCTF website),
+see the [backup challenge VPS setup guide](docs/backup-challenge-vps.md).
+
 Clone the companion source into the ignored `gzctf/` directory on a fresh checkout:
 
 ```sh
