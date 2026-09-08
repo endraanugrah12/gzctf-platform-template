@@ -12,7 +12,7 @@ DOCKER_SOCKET = os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock")
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/dynamic"))
 ROUTE_BASE_DOMAIN = os.environ.get("ROUTE_BASE_DOMAIN", "chal.example.com").strip(".")
 NETWORK_PREFIX = os.environ.get("CHALLENGE_NETWORK_PREFIX", "challenges").strip()
-POLL_SECONDS = max(2, int(os.environ.get("POLL_SECONDS", "10")))
+POLL_SECONDS = max(2, int(os.environ.get("POLL_SECONDS", "2")))
 
 
 class UnixHTTPConnection(HTTPConnection):
@@ -161,6 +161,8 @@ def build_routes():
 
 def atomic_write(path: Path, data: str):
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.read_text(encoding="utf-8") == data:
+        return
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text(data, encoding="utf-8")
     temp.replace(path)

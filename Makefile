@@ -2,6 +2,7 @@
 # Pure platform ops; for challenge authoring use gzcli separately.
 
 SUDO ?=
+LOCAL_GZCTF_IMAGE ?= gzctf-local:big-update
 COMPOSE = ${SUDO} docker compose -f compose.yml -f compose.challenge-proxy.yml
 COMPOSE_BARE = ${SUDO} docker compose -f compose.yml -f compose.standalone.yml
 
@@ -19,9 +20,9 @@ help:
 	@echo "  wizard           Interactive setup; choose Kubernetes or Docker Compose"
 	@echo "  k8s-wizard       Render secret Kubernetes manifests into k8s/generated"
 	@echo "  compose-wizard   Generate compose/.env + compose/appsettings.json"
-	@echo "  setup            One-time bootstrap: create the external `traefik` + `challenges` networks"
+	@echo "  setup            One-time bootstrap: create the external traefik/challenge networks"
 	@echo "  init-config      Generate compose/appsettings.json from the example + .env (auto-runs on platform-up)"
-	@echo "  platform-build   Compatibility alias for pull-gzctf (GZCTF image is prebuilt)"
+	@echo "  platform-build   Build the vendored GZCTF source with local platform patches"
 	@echo "  platform-up      Start gzctf + db + cache + traefik (auto-runs init-config if config missing)"
 	@echo "  platform-up-no-traefik   Start gzctf + db + cache only, expose gzctf on host port 8080"
 	@echo "  platform-down    Stop everything (keeps volumes)"
@@ -42,8 +43,8 @@ help:
 	@echo "  pull-gzctf       Pull the configured GZCTF image (no restart)"
 	@echo "  pull             Pull latest of every image incl. traefik (no restart)"
 	@echo "  pull-no-traefik  Pull latest of gzctf + postgres + redis (no restart)"
-	@echo "  update-gzctf     Build gzctf + recreate just the gzctf container"
-	@echo "  update           Pull all + recreate any container with a changed image (traefik mode)"
+	@echo "  update-gzctf     Build patched gzctf + recreate just the gzctf container"
+	@echo "  update           Build patched gzctf + recreate changed services (traefik mode)"
 	@echo "  update-no-traefik  Same as 'update' but for the standalone (no-traefik) mode"
 	@echo ""
 	@echo "Kubernetes / k3s:"
@@ -73,11 +74,15 @@ compose-wizard:
 	@sh scripts/wizard.sh
 
 setup:
-	@echo "Creating external docker networks 'traefik' + 'challenges' (idempotent)..."
+	@echo "Creating external Docker networks (idempotent)..."
 	@${SUDO} docker network inspect traefik >/dev/null 2>&1 \
 		|| ${SUDO} docker network create traefik
 	@${SUDO} docker network inspect challenges >/dev/null 2>&1 \
 		|| ${SUDO} docker network create challenges
+	@${SUDO} docker network inspect challenges-open >/dev/null 2>&1 \
+		|| ${SUDO} docker network create challenges-open
+	@${SUDO} docker network inspect challenges-isolated >/dev/null 2>&1 \
+		|| ${SUDO} docker network create --internal challenges-isolated
 	@echo "Done. Run 'make platform-up' to start the platform."
 
 # Generates compose/appsettings.json from the shipped example on
@@ -86,15 +91,17 @@ init-config:
 	@sh scripts/init-config.sh
 
 platform-build:
-	@$(MAKE) pull-gzctf
+	@${SUDO} docker build -t ${LOCAL_GZCTF_IMAGE} -f gzctf/Dockerfile.local gzctf
 
 platform-up: init-config
-	(cd compose && ${COMPOSE} up -d)
+	@${SUDO} docker image inspect ${LOCAL_GZCTF_IMAGE} >/dev/null 2>&1 || $(MAKE) --no-print-directory platform-build
+	(cd compose && GZCTF_IMAGE=${LOCAL_GZCTF_IMAGE} ${COMPOSE} up -d)
 
 # Bring up gzctf + db + cache only — no traefik, no TLS. gzctf is
 # reachable on http://<host>:8080.
 platform-up-no-traefik: init-config
-	(cd compose && ${COMPOSE_BARE} up -d)
+	@${SUDO} docker image inspect ${LOCAL_GZCTF_IMAGE} >/dev/null 2>&1 || $(MAKE) --no-print-directory platform-build
+	(cd compose && GZCTF_IMAGE=${LOCAL_GZCTF_IMAGE} ${COMPOSE_BARE} up -d)
 
 platform-down:
 	(cd compose && ${COMPOSE} down)
@@ -116,17 +123,17 @@ pull-gzctf:
 # 'up -d' recreates any container whose image digest changed and
 # leaves the rest alone. Safe to run while the platform is live —
 # only gzctf goes down briefly if its image was updated.
-update: pull
-	(cd compose && ${COMPOSE} up -d)
+update: platform-build
+	(cd compose && GZCTF_IMAGE=${LOCAL_GZCTF_IMAGE} ${COMPOSE} up -d)
 
-update-no-traefik: pull-no-traefik
-	(cd compose && ${COMPOSE_BARE} up -d)
+update-no-traefik: platform-build
+	(cd compose && GZCTF_IMAGE=${LOCAL_GZCTF_IMAGE} ${COMPOSE_BARE} up -d)
 
 # Targeted refresh: only touch the gzctf container; leave traefik
 # and the DB/cache running. Works in either traefik or standalone
 # mode since both files describe the same gzctf service.
-update-gzctf: pull-gzctf
-	(cd compose && ${COMPOSE} up -d --no-deps gzctf)
+update-gzctf: platform-build
+	(cd compose && GZCTF_IMAGE=${LOCAL_GZCTF_IMAGE} ${COMPOSE} up -d --no-deps gzctf)
 
 platform-logs:
 	(cd compose && ${COMPOSE} logs -f)

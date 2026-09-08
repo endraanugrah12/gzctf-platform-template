@@ -8,10 +8,11 @@ fork rather than the upstream GZCTF image.
 
 ## Changes in this fork
 
-- **Published custom images.** GZCTF runs from
-  `ghcr.io/endraanugrah12/gzctf:evidence-routes`. GitHub Actions also publishes
+- **Custom application build.** Compose Makefile targets build the companion
+  source as `gzctf-local:big-update` so local patches are included. The published
+  `ghcr.io/endraanugrah12/gzctf:evidence-routes` image remains available for other deployments. GitHub Actions also publishes
   the WireGuard, SSH jump, and Kubernetes challenge-route helper images to
-  GHCR, so the target server does not compile the platform locally.
+  GHCR.
 - **Two-node K3s deployment.** `make wizard` can render a control/worker setup
   into `k8s/generated/`. PostgreSQL, Redis, GZCTF, Traefik, persistent files,
   and access helpers stay on the control node; challenge workloads are placed
@@ -46,9 +47,16 @@ rewrite an existing deployment. Review
 
 ## Docker compose
 
+Clone the companion source into the ignored `gzctf/` directory on a fresh checkout:
+
+```sh
+git clone --branch evidence-routes https://github.com/endraanugrah12/GZCTF.git gzctf
+```
+
 ```sh
 make compose-wizard # interactive prompts → writes .env + appsettings.json
-make setup          # creates the external `traefik` docker network
+make setup          # creates external proxy and challenge networks
+make platform-build # compiles the local GZCTF source and frontend
 make platform-up    # starts gzctf + db + cache + traefik
 ```
 
@@ -58,6 +66,39 @@ as user `Admin`.
 
 `make help` lists every target. SMTP / captcha / private-registry
 credentials can also be configured later under `/admin/settings`.
+
+The game admin page includes **Reset activity** for solves and notifications,
+and **Manage challenges** is accessible without joining the game. New challenges
+default to 500 points with a 100-point floor; existing scores are preserved.
+The public scoreboard stays frozen from the configured freeze time until that
+setting is cleared. Admins and monitors see live standings.
+
+Under **Admin → Users → Edit**, **Hide from scoreboard** hides any team containing
+that account across all games, including frozen boards and timelines. For Jeopardy,
+hidden teams also stop affecting dynamic points and blood bonuses. Submissions and
+evidence remain stored; turning the option off restores eligibility.
+
+Player instance panels check readiness before enabling connection details. HTTPS
+checks the root URL (including the route and certificate); 404/5xx stay pending.
+TCP checks the service's listening port. Checks finish as soon as the endpoint
+responds, or offer **Retry check** after roughly 20 seconds. A web application whose
+root intentionally returns 404 must provide a working root response for this check.
+The Compose route watcher polls every two seconds and updates Traefik only when
+routes change.
+
+### Appearance editor
+
+Open **Admin → Appearance** to edit the title prefix, slogan, primary color,
+logo/favicon URLs, homepage Markdown, announcement banner, footer, and custom CSS.
+Markdown can include links and images. The embedded player homepage previews
+unsaved changes in desktop or mobile width. **Save draft** persists work privately;
+**Publish design** updates player pages within 30 seconds, without an image rebuild.
+**Restore defaults** clears both draft and published overrides and uses the original
+Settings branding again. CSS is never applied to admin or account pages.
+
+The draft and published designs are stored separately in the existing database
+configuration table. Only admins can read drafts or change designs. This is a
+branding/content editor; JavaScript and arbitrary page components are not supported.
 
 ## Bring your own container (self-hosted A&D)
 

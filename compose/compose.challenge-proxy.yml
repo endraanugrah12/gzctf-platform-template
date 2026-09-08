@@ -42,7 +42,7 @@
         - "ROUTE_BASE_DOMAIN=${CHALLENGE_BASE_DOMAIN}"
         - "CHALLENGE_NETWORK_PREFIX=challenges"
         - "OUTPUT_DIR=/dynamic"
-        - "POLL_SECONDS=10"
+        - "POLL_SECONDS=2"
       volumes:
         - "/var/run/docker.sock:/var/run/docker.sock:ro"
         - "./challenge-proxy/dynamic:/dynamic"
